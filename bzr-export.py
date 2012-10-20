@@ -134,7 +134,22 @@ def exportTreeChanges(oldTree, newTree, cfg):
     
 
 def exportSubTree(path, tree, cfg):
-    for 
+    for item in tree.walkdirs(prefix=path):
+        if len(item[1]) == 0:
+            # empty dir -- emit placeholder to keep it alive
+            # FIXME: quote filename
+            sys.stdout.write('M 644 inline {}/.keepme\ndata 0\n'.format(item[0][0]))
+        else:
+            for obj in item[1]:
+                # obj is (relpath, basename, kind, lstat?, file_id, versioned_kind)
+                if not obj[2]: # I don't think this might ever happen, but....
+                    log("WARN: empty kind when walking tree of {}: subdir: {}", tree.get_revision_id(), item[0][0])
+                    continue
+                elif obj[2] == 'directory':
+                    # skip dir entries -- we will step into them later
+                    continue
+                else:
+                    emitFile(obj[0], obj[2], obj[4], tree)
     
 def emitReset(ref, mark):
     if mark:
@@ -152,6 +167,23 @@ def emitCommitHeader(ref, mark, revobj, parents):
        fmt = 'from {}\n' + 'merge {}\n'*(len(parents)-1)
        sys.stdout.write(fmt.format(*parents))
 
+def emitFile(path, kind, fileId, tree):
+    if kind == 'file':
+        data = tree.get_file_text(fileId)
+        if tree.is_executable(fileId):
+            mode = '755'
+        else:
+            mode = '644'
+    elif kind == 'symlink':
+        mode = '120000'
+        data = tree.get_symlink_target(fileId)
+    else:
+        log("WARN: unsupported file kind '{}' in {} path {}", kind, tree.get_revision_id(), path)
+        return
+
+    # fixme quote filename
+    sys.stdout.write('M {} inline {}\ndata {}\n{}\n'.format(mode, path, len(data), data))
+    
 def emptyDir(tree, path):
     for x in tree.walkdirs(prefix=path):
         return len(x[1]) == 0
