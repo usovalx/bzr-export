@@ -3,13 +3,15 @@
 from bzrlib import branch, bzrdir, revision, repository
 from bzrlib import errors as berrors
 import email.utils
-import sys
 import getopt
+import re
+import sys
 
 class Config(object):
     """Misc stuff here -- various config flags & marks management"""
     
     def __init__(self):
+        self.debug = False
         self.nextMark = 1
         self.marks = {}
 
@@ -40,7 +42,7 @@ Marks file is loaded before export begins, and will be used to 'resume' export.
 def main(argv):
     # parse command-line flags
     try:
-        opts, args = getopt.getopt(argv, 'hm:')
+        opts, args = getopt.getopt(argv, 'hdm:')
     except getopt.GetoptError as e:
         err(e)
 
@@ -54,6 +56,8 @@ def main(argv):
         elif o == '-m':
             err('Marks not implemented yet')
             marksFile = v
+        elif o == '-d':
+            cfg.debug = True
         else:
             usage()
         
@@ -114,6 +118,9 @@ def exportCommit(revid, ref, branch, cfg):
     else:
         parentRev = parents[0]
 
+    if cfg.debug:
+        sys.stdout.write('# committer: {}\n'.format(rev.committer.encode('utf8')))
+    
     thisMark = cfg.newMark(revid)
     parentsMarks = map(cfg.getMark, parents)
     assert(all(parentsMarks)) # FIXME: check that all parents are present in marks
@@ -123,22 +130,119 @@ def exportCommit(revid, ref, branch, cfg):
     sys.stdout.write('\n')
 
 def exportTreeChanges(oldTree, newTree, cfg):
-    changes = newTree.iter_changes(oldTree)
-    # changes is a list of tuples 
-    # (file_id, (path_in_source, path_in_target),
-    #    changed_content, versioned, parent, name, kind,
-    #    executable)
+    # In general case exporting changes from bzr is highly nontrivial
+    # bzr is tracking each file & directory by internal ids.
+    # If you want to preserve history correctly you are forced to do some
+    # very messy voodo to correctly order and emit renames/deletes/modifications
 
-    # renaming of dirs, deletion of dirs, moving stuff around are tricky to implement correctly
-    # however with Git we can just delete old content, and spit out new one
+    # However I'm exporting stuff to git which is much simpler -- I can simply
+    # delete all modified paths and export them afresh. This is a bit slower, but
+    # much easier to implement correctly. There is one complication though -- my
+    # bzr repo has empty dirs in the history, and I want to preserve them in the
+    # export by emitting .keepme files where appropriate. To correctly track them
+    # during deletes/renames I need to make sure I correctly issue whole-dir commands.
+
+    # The resulting algorithm is following:
+    # * rewrite the list of changes between two trees in terms of simple delete/create
+    # commands and split them into 4 groups:
+    #    delete/create directories & delete/create(modify) files
+    # * simplify the resulting list of operations by taking into account subdirectory
+    # operations. E.g. we don't need to separately delete nested files/subdirs if
+    # parent directory is to be deleted. Same with creation.
+    # * Finally issue resulting list of deletes & then creations.
+
+    delDirs, newDirs, delFiles, newFiles = [], [], [], []
+    def addDel(c):
+        if c[6][0] == 'directory':
+            delDirs.append(c[1][0])
+        else:
+            delFiles.append((c[1][0], c[6][0], c[0]))
+    def addNew(c):
+        if c[6][1] == 'directory':
+            newDirs.append(c[1][1])
+        else:
+            newFiles.append((c[1][1], c[6][1], c[0]))
+    for c in newTree.iter_changes(oldTree):
+        # c is a tuple (file_id, (path_in_source, path_in_target),
+        #    changed_content, versioned, parent, name, kind,
+        #    executable)
+        if cfg.debug:
+            sys.stdout.write('# change: {}\n'.format(c))
+        if c[1][0] is None:  # stuff added
+            assert(c[6][0] is None)
+            assert(c[1][1] is not None and c[6][1] is not None)
+            addNew(c)
+        elif c[1][1] is None: # removed
+            assert(c[6][1] is None)
+            assert(c[1][0] is not None and c[6][0] is not None)
+            addDel(c)
+        else: # changed or moved
+            # files changed in-place don't have to be deleted, everything else
+            # becomes delete + new item
+            if c[1][0] == c[1][1] and c[6][0] != 'directory' and c[6][1] != 'directory':
+                addNew(c)
+            else:
+                addDel(c)
+                addNew(c)
+
+    # now clean up nested directories and files
+    def isIncluded(roots, path):
+        for x in roots:
+            if path.startswith(x):
+                return True
+        return False
+
+    def cleanDirs(dirs):
+        # sort them, so the roots are first
+        dirs = sorted(dirs)
+        r = []
+        for d in dirs:
+            if not isIncluded(r, d):
+                r.append(d)
+        return r
+
+    def cleanFiles(dirs, files):
+        r = []
+        for f in files:
+            if not isIncluded(dirs, f[0]):
+                r.append(f)
+        return r
+
+    delDirs = cleanDirs(delDirs)
+    newDirs = cleanDirs(newDirs)
+    delFiles = cleanFiles(delDirs, delFiles)
+    newFiles = cleanFiles(newDirs, newFiles)
+
+    if cfg.debug:
+        sys.stdout.write('# delDirs: {}\n# delFiles: {}\n# newDirs: {}\n# newFiles: {}\n'.format(delDirs, delFiles, newDirs, newFiles))
+
+    # and finally -- write out resulting changes
+    keepmes = set()
+    for d in delDirs:
+        if d == '':
+            emitDeleteAll()
+        else:
+            emitDelete(d)
+    for f in delFiles:
+        # check if we need to emit placeholder to keep dir alive
+        base = f[0].rpartition('/')[0]
+        if base != '' and base not in keepmes and emptyDir(base, newTree):
+            keepmes.add(base)
+            emitPlaceholder(base)
+        emitDelete(f[0])
+    for d in newDirs:
+        exportSubTree(d, newTree, cfg)
+    for f in newFiles:
+        emitFile(f[0], f[1], f[2], newTree)
     
+    return delDirs, newDirs, delFiles, newFiles
+
 
 def exportSubTree(path, tree, cfg):
     for item in tree.walkdirs(prefix=path):
         if len(item[1]) == 0:
-            # empty dir -- emit placeholder to keep it alive
-            # FIXME: quote filename
-            sys.stdout.write('M 644 inline {}/.keepme\ndata 0\n'.format(item[0][0]))
+            # empty dir -- write placeholder to keep it alive
+            emitPlaceholder(item[0][0])
         else:
             for obj in item[1]:
                 # obj is (relpath, basename, kind, lstat?, file_id, versioned_kind)
@@ -161,7 +265,7 @@ def emitCommitHeader(ref, mark, revobj, parents):
     headF = 'commit {}\nmark {}\ncommitter {} {}\n'
     sys.stdout.write(headF.format(ref, mark, formatName(revobj.committer), formatTimestamp(revobj.timestamp, revobj.timezone)))
     msg = revobj.message.encode('utf8')
-    msg += '\n\n revid:%s' % revobj.revision_id
+    msg += '\n\nBazaar: revid:%s' % revobj.revision_id
     sys.stdout.write('data %d\n%s\n' % (len(msg), msg))
     if len(parents) != 0:
        fmt = 'from {}\n' + 'merge {}\n'*(len(parents)-1)
@@ -183,8 +287,17 @@ def emitFile(path, kind, fileId, tree):
 
     # fixme quote filename
     sys.stdout.write('M {} inline {}\ndata {}\n{}\n'.format(mode, path, len(data), data))
-    
-def emptyDir(tree, path):
+
+def emitPlaceholder(path):
+    sys.stdout.write('M 644 inline {}\ndata 0\n'.format(formatPath(path + '/.keepme')))
+
+def emitDelete(path):
+    sys.stdout.write('D {}\n'.format(formatPath(path)))
+
+def emitDeleteAll():
+    sys.stdout.write('deleteall\n')
+
+def emptyDir(path, tree):
     for x in tree.walkdirs(prefix=path):
         return len(x[1]) == 0
        
@@ -198,12 +311,32 @@ def formatTimestamp(timestamp, offset):
     minutes = offset/60
     return '%d %s%02d%02d' % (timestamp, sign, hours, minutes)
 
+emailRe = re.compile(r'[<>@\n]')
 def formatName(name):
-    name, mail = email.utils.parseaddr(name.encode('utf8'))
-    if name == '':
-        return '<%s>' % mail
+    if emailRe.search(name):
+        name, mail = email.utils.parseaddr(name.encode('utf8'))
+        if name == '':
+            return '<%s>' % mail
+        else:
+            return '%s <%s>' % (name, mail)
     else:
-        return '%s <%s>' % (name, mail)
+        return '%s <>' % name
+
+def formatPath(path):
+    assert(path is not None)
+    assert(path != '')
+    assert(path[0] != '/')
+    quote = False
+    if '\n' in path:
+        quote = True
+        path = path.replace('\n', '\\n')
+    if path[0] == '"':
+        quote = True
+        path = path.replace('"', '\\"')
+    if quote:
+        return '"%s"' % path.encode('utf8')
+    else:
+        return path.encode('utf8')
     
 def log(f, *args):
     sys.stderr.write((str(f) + '\n').format(*args))
