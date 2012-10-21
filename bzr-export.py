@@ -2,18 +2,55 @@
 
 from bzrlib import branch, bzrdir, revision, repository
 from bzrlib import errors as berrors
+import datetime
 import email.utils
 import getopt
+import os
 import re
 import sys
+import time
 
 class Config(object):
     """Misc stuff here -- various config flags & marks management"""
-    
+
     def __init__(self):
         self.debug = False
+        self.fname = None
+        self.forceAll = False
+        self.refName = None
+
         self.nextMark = 1
         self.marks = {}
+
+    def load(self, fname):
+        self.fname = fname
+        if os.path.exists(fname):
+            f = open(fname, "r")
+            maxMark = 1
+            for l in f:
+                s = l.split()
+                if len(s) == 0:
+                    continue
+                if len(s) != 2:
+                    log("ERROR: this doesn't looks like marks string: {}", l.strip())
+                    continue
+                maxMark = max(maxMark, int(s[0][1:]))
+                self.marks[s[1]] = s[0]
+            f.close()
+            self.nextMark = maxMark
+            log("Marks loaded: {} entries", len(self.marks))
+        else:
+            # try creating empty file, just to make sure we can write there
+            f = open(fname, "w")
+            f.close()
+
+    def save(self):
+        if self.fname is None:
+            return
+        f = open(self.fname, "w")
+        for r, m in self.marks.iteritems():
+            f.write('%s %s\n' % (m, r))
+        f.close()
 
     def newMark(self, revid):
         """Add new revision to the set and return its mark"""
@@ -26,15 +63,39 @@ class Config(object):
         """Get a mark corresponding to revid. Returns None if revision isn't marked"""
         return self.marks.get(revid, None)
 
+class Stats(object):
+    def __init__(self):
+        self._skipped = 0
+        self._exported = 0
+        self._starttime = time.time()
+
+    def __str__(self):
+        now = time.time()
+        dur = datetime.timedelta(seconds = now - self._starttime)
+        return "{} exported {} reused, time spent {} ({} revision/minute)".format(
+            self._exported, self._skipped, dur, int(self._exported*60/(now - self._starttime)))
+
+    def skipped(self):
+        self._skipped += 1
+
+    def exported(self):
+        self._exported += 1
+
 def usage():
-    m = """Usage: bzr-export.py [-h] [-m <marks file>] <path to branch or shared repo>
+    m = """Usage: bzr-export.py [-h] [-f] [-d] [-m <marks file>] <path>
+
+   -h      Show this message.
+   -b      Branch name for git.
+           Only used when exporting single branch, not a shared repo.
+   -f      Force export of all branches, even if they are cached in marks.
+   -d      Debugging. Writes some debug info as comments in the resulting stream.
+   -m      Load/save marks into this file.
 
 Both branch and shared repo can be provided as a source. In case of shared repo,
-all branches in it will be exported.
+all branches in it will be exported. If you are doing initial export you really
+want to use -f, so that all branches are exported.
 
-Resulting stream is sent to standard output.
-
-Marks file is loaded before export begins, and will be used to 'resume' export.
+Resulting fast-export stream is sent to standard output.
 """
     print(m)
     sys.exit(1)
@@ -42,7 +103,7 @@ Marks file is loaded before export begins, and will be used to 'resume' export.
 def main(argv):
     # parse command-line flags
     try:
-        opts, args = getopt.getopt(argv, 'hdm:')
+        opts, args = getopt.getopt(argv, 'fhdm:b:')
     except getopt.GetoptError as e:
         err(e)
 
@@ -54,13 +115,16 @@ def main(argv):
         if o == '-h':
             usage()
         elif o == '-m':
-            err('Marks not implemented yet')
-            marksFile = v
+            cfg.load(v)
         elif o == '-d':
             cfg.debug = True
+        elif o == '-f':
+            cfg.forceAll = True
+        elif o == '-b':
+            cfg.refName = v
         else:
             usage()
-        
+
     # proceed to export
     startExport(args[0], cfg)
 
@@ -68,8 +132,8 @@ def startExport(path, cfg):
     # try opening it as branch
     try:
         b = branch.Branch.open(path)
-        exportBranch(b, cfg) ## FIXME: return here
-        return b
+        name = cfg.refName or b.user_url.rstrip('/').split('/')[-1]
+        exportBranch(b, formatRefName(name), cfg)
         return
     except berrors.NotBranchError:
         pass
@@ -77,30 +141,48 @@ def startExport(path, cfg):
     # or as shared repo
     try:
         repo = repository.Repository.open(path)
+        prevRefs = set()
         bs = repo.find_branches()
         for b in bs:
-            exportBranch(b, cfg)
+            assert(b.user_url.startswith(repo.user_url))
+            name = b.user_url[len(repo.user_url):].strip('/')
+            ref = formatRefName(name)
+            if ref in prevRefs:
+                log("ERROR: refname rewriting resulted in colliding refnames.")
+                log("ERROR: ref {} for branch {}", ref, b.user_url)
+                log("ERROR: skipping this branch")
+                continue
+            prevRefs.add(ref)
+            exportBranch(b, ref, cfg)
     except berrors.BzrError as e:
         err(e)
 
-def exportBranch(branch, cfg):
-    branchName = branch.nick ## FIXME: subdirs, sanitize
-    refName = 'refs/heads/' + branchName
-    log('Exporting branch {0} as {1} ({2})', branchName, refName, branch.base)
+def exportBranch(branch, ref, cfg):
+    log('Exporting branch {0} as {1} ({2})', branch.nick, ref, branch.user_url)
+    stats = Stats()
     lockobj = branch.lock_read()
     try:
-        # TODO: check if branch.last_revision() is in the cached set and export it as plain reset?
-        #   only valid for the first export???
-
-        # get full history of the branch
-        hist = [x[0] for x in branch.iter_merge_sorted_revisions(direction='forward')]
-        log('Starting export of {0:d} revisions', len(hist))
-        ## FIXME: add some timings
-        for revid in hist:
-            # skip those which are already exported
-            exportCommit(revid, refName, branch, cfg)
+        if cfg.getMark(branch.last_revision()):
+            if cfg.forceAll:
+                emitReset(ref, cfg.getMark(branch.last_revision()))
+            else:
+                log("Nothing to do: no new revisions")
+        else:
+            # get full history of the branch
+            hist = [x[0] for x in branch.iter_merge_sorted_revisions(direction='forward')]
+            log('Starting export of {0:d} revisions', len(hist))
+            for revid in hist:
+                if cfg.getMark(revid):
+                    stats.skipped()
+                    continue
+                exportCommit(revid, ref, branch, cfg)
+                stats.exported()
+                if stats._exported % 5000 == 0:
+                    log("{}", stats)
+            cfg.save()
     finally:
         lockobj.unlock()
+    log("Finished export: {}", stats)
 
 def exportCommit(revid, ref, branch, cfg):
     try:
@@ -120,7 +202,7 @@ def exportCommit(revid, ref, branch, cfg):
 
     if cfg.debug:
         sys.stdout.write('# committer: {}\n'.format(rev.committer.encode('utf8')))
-    
+
     thisMark = cfg.newMark(revid)
     parentsMarks = map(cfg.getMark, parents)
     assert(all(parentsMarks)) # FIXME: check that all parents are present in marks
@@ -234,7 +316,7 @@ def exportTreeChanges(oldTree, newTree, cfg):
         exportSubTree(d, newTree, cfg)
     for f in newFiles:
         emitFile(f[0], f[1], f[2], newTree)
-    
+
     return delDirs, newDirs, delFiles, newFiles
 
 
@@ -254,7 +336,7 @@ def exportSubTree(path, tree, cfg):
                     continue
                 else:
                     emitFile(obj[0], obj[2], obj[4], tree)
-    
+
 def emitReset(ref, mark):
     if mark:
         sys.stdout.write('reset {0:s}\nfrom {1:s}\n\n'.format(ref, mark))
@@ -300,7 +382,7 @@ def emitDeleteAll():
 def emptyDir(path, tree):
     for x in tree.walkdirs(prefix=path):
         return len(x[1]) == 0
-       
+
 def formatTimestamp(timestamp, offset):
     if offset < 0:
         sign = '-'
@@ -337,7 +419,38 @@ def formatPath(path):
         return '"%s"' % path.encode('utf8')
     else:
         return path.encode('utf8')
-    
+
+# stolen from bzr fast-export
+def formatRefName(branchName):
+    """Rewrite branchName so that it will be accepted by git-fast-import.
+    For the detailed rules see check_ref_format.
+
+    By rewriting the refname we are breaking uniqueness guarantees provided by bzr
+    so we have to manually verify that resulting ref names are unique.
+
+    http://www.kernel.org/pub/software/scm/git/docs/git-check-ref-format.html
+    """
+    refname = "refs/heads/%s" % branchName.encode('utf8')
+    refname = re.sub(
+        # '/.' in refname or startswith '.'
+        r"/\.|^\."
+        # '..' in refname
+        r"|\.\."
+        # ord(c) < 040
+        r"|[" + "".join([chr(x) for x in range(040)]) + r"]"
+        # c in '\177 ~^:?*['
+        r"|[\177 ~^:?*[]"
+        # last char in "/."
+        r"|[/.]$"
+        # endswith '.lock'
+        r"|.lock$"
+        # "@{" in refname
+        r"|@{"
+        # "\\" in refname
+        r"|\\",
+        "_", refname)
+    return refname
+
 def log(f, *args):
     sys.stderr.write((str(f) + '\n').format(*args))
 
