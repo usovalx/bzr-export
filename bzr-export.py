@@ -15,6 +15,7 @@ class Config(object):
 
     def __init__(self):
         self.debug = False
+        self.excludedFiles = set()
         self.fname = None
         self.forceAll = False
         self.refName = None
@@ -82,7 +83,7 @@ class Stats(object):
         self._exported += 1
 
 def usage():
-    m = """Usage: bzr-export.py [-h] [-f] [-d] [-m <marks file>] <path>
+    m = """Usage: bzr-export.py [-h] [-f] [-d] [-m <marks file>] [-x <excludes>] <path>
 
    -h      Show this message.
    -b      Branch name for git.
@@ -90,10 +91,15 @@ def usage():
    -f      Force export of all branches, even if they are cached in marks.
    -d      Debugging. Writes some debug info as comments in the resulting stream.
    -m      Load/save marks into this file.
+   -x      Read a list of excluded files/directories. File is eval'd and should
+           return python array of file names.
 
 Both branch and shared repo can be provided as a source. In case of shared repo,
 all branches in it will be exported. If you are doing initial export you really
 want to use -f, so that all branches are exported.
+
+Excludes specified via -x are matched against both files and directories. Don't try
+to force matching against directories by appending '/' -- it won't match at all.
 
 Resulting fast-export stream is sent to standard output.
 """
@@ -103,7 +109,7 @@ Resulting fast-export stream is sent to standard output.
 def main(argv):
     # parse command-line flags
     try:
-        opts, args = getopt.getopt(argv, 'fhdm:b:')
+        opts, args = getopt.getopt(argv, 'fhdm:b:x:')
     except getopt.GetoptError as e:
         err(e)
 
@@ -122,6 +128,11 @@ def main(argv):
             cfg.forceAll = True
         elif o == '-b':
             cfg.refName = v
+        elif o == '-x':
+            f = open(v, "r")
+            x = eval(f.read())
+            cfg.excludedFiles = set(x)
+            f.close()
         else:
             usage()
 
@@ -266,7 +277,7 @@ def exportTreeChanges(oldTree, newTree, cfg):
                 addNew(c)
 
     # now clean up nested directories and files
-    def isIncluded(roots, path):
+    def isNested(roots, path):
         for x in roots:
             if path.startswith(x + '/'):
                 return True
@@ -279,7 +290,9 @@ def exportTreeChanges(oldTree, newTree, cfg):
         dirs = sorted(dirs)
         r = []
         for d in dirs:
-            if not isIncluded(r, d):
+            if d in cfg.excludedFiles or isNested(cfg.excludedFiles, d):
+                continue
+            if not isNested(r, d):
                 r.append(d)
         return r
 
@@ -288,7 +301,9 @@ def exportTreeChanges(oldTree, newTree, cfg):
             return []
         r = []
         for f in files:
-            if not isIncluded(dirs, f[0]):
+            if f[0] in cfg.excludedFiles or isNested(cfg.excludedFiles, f[0]):
+                continue
+            if not isNested(dirs, f[0]):
                 r.append(f)
         return r
 
@@ -309,7 +324,7 @@ def exportTreeChanges(oldTree, newTree, cfg):
     for f in delFiles:
         # check if we need to emit placeholder to keep dir alive
         base = f[0].rpartition('/')[0]
-        if base != '' and base not in keepmes and emptyDir(base, newTree):
+        if base != '' and base not in keepmes and emptyDir(base, cfg, newTree):
             keepmes.add(base)
             emitPlaceholder(base)
         emitDelete(f[0])
@@ -320,6 +335,10 @@ def exportTreeChanges(oldTree, newTree, cfg):
 
 def exportSubTree(path, tree, cfg):
     for item in tree.walkdirs(prefix=path):
+        # we need to update it in-place to prevent it from walking into excluded items
+        excludes = filter(lambda x: x[0] in cfg.excludedFiles, item[1])
+        for x in excludes:
+            item[1].remove(x)
         if len(item[1]) == 0:
             # empty dir -- write placeholder to keep it alive
             emitPlaceholder(item[0][0])
@@ -377,9 +396,11 @@ def emitDelete(path):
 def emitDeleteAllout():
     out('deleteall\n')
 
-def emptyDir(path, tree):
+def emptyDir(path, cfg, tree):
     for x in tree.walkdirs(prefix=path):
-        return len(x[1]) == 0
+        # filter out excluded entries and check if it's empty
+        r = filter(lambda t: t[0] not in cfg.excludedFiles, x[1])
+        return len(r) == 0
 
 def formatTimestamp(timestamp, offset):
     if offset < 0:
