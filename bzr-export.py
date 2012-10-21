@@ -200,8 +200,7 @@ def exportCommit(revid, ref, branch, cfg):
     else:
         parentRev = parents[0]
 
-    if cfg.debug:
-        sys.stdout.write('# committer: {}\n'.format(rev.committer.encode('utf8')))
+    debug(cfg, 'committer: {}\n', rev.committer.encode('utf8'))
 
     thisMark = cfg.newMark(revid)
     parentsMarks = map(cfg.getMark, parents)
@@ -209,7 +208,7 @@ def exportCommit(revid, ref, branch, cfg):
     emitCommitHeader(ref, thisMark, rev, parentsMarks)
     oldTree, newTree = map(branch.repository.revision_tree, [parentRev, revid])
     exportTreeChanges(oldTree, newTree, cfg)
-    sys.stdout.write('\n')
+    out('\n')
 
 def exportTreeChanges(oldTree, newTree, cfg):
     # In general case exporting changes from bzr is highly nontrivial
@@ -248,8 +247,7 @@ def exportTreeChanges(oldTree, newTree, cfg):
         # c is a tuple (file_id, (path_in_source, path_in_target),
         #    changed_content, versioned, parent, name, kind,
         #    executable)
-        if cfg.debug:
-            sys.stdout.write('# change: {}\n'.format(c))
+        debug(cfg, 'change: {}\n', c)
         if c[1][0] is None:  # stuff added
             assert(c[6][0] is None)
             assert(c[1][1] is not None and c[6][1] is not None)
@@ -295,8 +293,7 @@ def exportTreeChanges(oldTree, newTree, cfg):
     delFiles = cleanFiles(delDirs, delFiles)
     newFiles = cleanFiles(newDirs, newFiles)
 
-    if cfg.debug:
-        sys.stdout.write('# delDirs: {}\n# delFiles: {}\n# newDirs: {}\n# newFiles: {}\n'.format(delDirs, delFiles, newDirs, newFiles))
+    debug(cfg, 'delDirs: {}\n# delFiles: {}\n# newDirs: {}\n# newFiles: {}\n', delDirs, delFiles, newDirs, newFiles)
 
     # and finally -- write out resulting changes
     keepmes = set()
@@ -339,19 +336,19 @@ def exportSubTree(path, tree, cfg):
 
 def emitReset(ref, mark):
     if mark:
-        sys.stdout.write('reset {0:s}\nfrom {1:s}\n\n'.format(ref, mark))
+        out('reset {0:s}\nfrom {1:s}\n\n', ref, mark)
     else:
-        sys.stdout.write('reset {0:s}\n\n'.format(ref))
+        out('reset {0:s}\n\n', ref)
 
 def emitCommitHeader(ref, mark, revobj, parents):
     headF = 'commit {}\nmark {}\ncommitter {} {}\n'
-    sys.stdout.write(headF.format(ref, mark, formatName(revobj.committer), formatTimestamp(revobj.timestamp, revobj.timezone)))
+    out(headF, ref, mark, formatName(revobj.committer), formatTimestamp(revobj.timestamp, revobj.timezone))
     msg = revobj.message.encode('utf8')
     msg += '\n\nBazaar: revid:%s' % revobj.revision_id
-    sys.stdout.write('data %d\n%s\n' % (len(msg), msg))
+    out('data {}\n{:s}\n', len(msg), msg)
     if len(parents) != 0:
        fmt = 'from {}\n' + 'merge {}\n'*(len(parents)-1)
-       sys.stdout.write(fmt.format(*parents))
+       out(fmt, *parents)
 
 def emitFile(path, kind, fileId, tree):
     if kind == 'file':
@@ -368,16 +365,16 @@ def emitFile(path, kind, fileId, tree):
         return
 
     # fixme quote filename
-    sys.stdout.write('M {} inline {}\ndata {}\n{}\n'.format(mode, path, len(data), data))
+    out('M {} inline {}\ndata {}\n{}\n', mode, path, len(data), data)
 
 def emitPlaceholder(path):
-    sys.stdout.write('M 644 inline {}\ndata 0\n'.format(formatPath(path + '/.keepme')))
+    out('M 644 inline {}\ndata 0\n', formatPath(path + '/.keepme'))
 
 def emitDelete(path):
-    sys.stdout.write('D {}\n'.format(formatPath(path)))
+    out('D {}\n', formatPath(path))
 
-def emitDeleteAll():
-    sys.stdout.write('deleteall\n')
+def emitDeleteAllout():
+    out('deleteall\n')
 
 def emptyDir(path, tree):
     for x in tree.walkdirs(prefix=path):
@@ -457,6 +454,13 @@ def log(f, *args):
 def err(f, *args):
     log('ERROR: ' + str(f), *args)
     sys.exit(1)
+
+def out(f, *args):
+    sys.stdout.write(f.format(*args))
+
+def debug(cfg, f, *args):
+    if cfg.debug:
+        out("# " + f, *args)
 
 if __name__ == '__main__':
     main(sys.argv[1:])
