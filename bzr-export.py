@@ -170,7 +170,6 @@ def startExport(path, cfg):
 
 def exportBranch(branch, ref, cfg):
     log('Exporting branch {0} as {1} ({2})', branch.nick, ref, branch.user_url)
-    stats = Stats()
     lockobj = branch.lock_read()
     try:
         if cfg.getMark(branch.last_revision()):
@@ -182,6 +181,7 @@ def exportBranch(branch, ref, cfg):
             # get full history of the branch
             hist = [x[0] for x in branch.iter_merge_sorted_revisions(direction='forward')]
             log('Starting export of {0:d} revisions', len(hist))
+            stats = Stats()
             for revid in hist:
                 if cfg.getMark(revid):
                     stats.skipped()
@@ -191,9 +191,9 @@ def exportBranch(branch, ref, cfg):
                 if stats._exported % 5000 == 0:
                     log("{}", stats)
             cfg.save()
+            log("Finished export: {}", stats)
     finally:
         lockobj.unlock()
-    log("Finished export: {}", stats)
 
 def exportCommit(revid, ref, branch, cfg):
     try:
