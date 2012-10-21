@@ -268,12 +268,14 @@ def exportTreeChanges(oldTree, newTree, cfg):
     # now clean up nested directories and files
     def isIncluded(roots, path):
         for x in roots:
-            if path.startswith(x):
+            if path.startswith(x + '/'):
                 return True
         return False
 
     def cleanDirs(dirs):
         # sort them, so the roots are first
+        if '' in dirs:
+            return ['']
         dirs = sorted(dirs)
         r = []
         for d in dirs:
@@ -282,6 +284,8 @@ def exportTreeChanges(oldTree, newTree, cfg):
         return r
 
     def cleanFiles(dirs, files):
+        if '' in dirs:
+            return []
         r = []
         for f in files:
             if not isIncluded(dirs, f[0]):
@@ -313,9 +317,6 @@ def exportTreeChanges(oldTree, newTree, cfg):
         exportSubTree(d, newTree, cfg)
     for f in newFiles:
         emitFile(f[0], f[1], f[2], newTree)
-
-    return delDirs, newDirs, delFiles, newFiles
-
 
 def exportSubTree(path, tree, cfg):
     for item in tree.walkdirs(prefix=path):
@@ -405,17 +406,10 @@ def formatPath(path):
     assert(path is not None)
     assert(path != '')
     assert(path[0] != '/')
-    quote = False
-    if '\n' in path:
-        quote = True
-        path = path.replace('\n', '\\n')
-    if path[0] == '"':
-        quote = True
-        path = path.replace('"', '\\"')
-    if quote:
+    if path[0] == '"' or '\n' in path:
+        path = path.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
         return '"%s"' % path.encode('utf8')
-    else:
-        return path.encode('utf8')
+    return path.encode('utf8')
 
 # stolen from bzr fast-export
 def formatRefName(branchName):
