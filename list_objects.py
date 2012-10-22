@@ -12,12 +12,12 @@ def main(args):
     vmap = set()
     i = 0
     for c in repo.iter_commits('--all'):
-        traverse(c.tree, vmap)
+        traverse(c.tree, vmap, c)
         i += 1
         if i % 5000 == 0:
             sys.stderr.write("Scanned %d revisions\n" % i)
 
-def traverse(t, vmap):
+def traverse(t, vmap, c):
     if t.hexsha in vmap:
         return
 
@@ -27,11 +27,11 @@ def traverse(t, vmap):
     for b in t.blobs:
         if b.hexsha not in vmap and b.size > 102400:
             vmap.add(b.hexsha)
-            print('%s  %8d  %s' % (b.hexsha, b.size/1024, b.path))
+            print('%s  %s  %8d  %s' % (b.hexsha, c.hexsha, b.size/1024, b.path))
 
     # and sub-trees
     for st in t.trees:
-        traverse(st, vmap)
+        traverse(st, vmap, c)
 
 if __name__ == '__main__':
     main(sys.argv[1:])
