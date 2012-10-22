@@ -1,7 +1,9 @@
 #!/usr/bin/env python2
 
+import datetime
 import git
 import sys
+import time
 
 def main(args):
     if len(args) != 1:
@@ -11,11 +13,15 @@ def main(args):
     repo = git.Repo(args[0], odbt=git.GitCmdObjectDB)
     vmap = set()
     i = 0
+    startTime = time.time()
     for c in repo.iter_commits('--all'):
         traverse(c.tree, vmap, c)
         i += 1
         if i % 5000 == 0:
-            sys.stderr.write("Scanned %d revisions\n" % i)
+            now = time.time()
+            dur = datetime.timedelta(seconds = now - startTime)
+            sys.stderr.write("Scanned {} revisions in {} ({} revisions/minute)\n".format(
+                i, dur, int(i*60/(now-startTime))))
 
 def traverse(t, vmap, c):
     if t.hexsha in vmap:
