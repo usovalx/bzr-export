@@ -284,9 +284,9 @@ def exportTreeChanges(oldTree, newTree, cfg):
         return False
 
     def cleanDirs(dirs):
-        # sort them, so the roots are first
         if '' in dirs:
             return ['']
+        # sort them, so that we traverse shallower dirs first
         dirs = sorted(dirs)
         r = []
         for d in dirs:
