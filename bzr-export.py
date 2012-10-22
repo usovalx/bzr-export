@@ -477,6 +477,16 @@ def debug(cfg, f, *args):
     if cfg.debug:
         out("# " + f, *args)
 
+def prof():
+    import cProfile
+    out = open("/dev/null", "w")
+    save = sys.stdout
+    try:
+        sys.stdout = out
+        cProfile.run('main(["/home/usov/build/testrepo/docky/trunk"])', "prof")
+    finally:
+        sys.stdout = save
+
 if __name__ == '__main__':
     main(sys.argv[1:])
 
