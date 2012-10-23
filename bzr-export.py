@@ -388,7 +388,7 @@ def emitFile(path, kind, fileId, tree):
         return
 
     # fixme quote filename
-    out('M {} inline {}\ndata {}\n{}\n', mode, path, len(data), data)
+    out('M {} inline {}\ndata {}\n{}\n', mode, formatPath(path), len(data), data)
 
 def emitPlaceholder(path):
     out('M 644 inline {}\ndata 0\n', formatPath(path + '/.keepme'))
