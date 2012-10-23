@@ -311,8 +311,16 @@ def exportTreeChanges(oldTree, newTree, cfg):
     newDirs = cleanDirs(newDirs)
     delFiles = cleanFiles(delDirs, delFiles)
     newFiles = cleanFiles(newDirs, newFiles)
-
     debug(cfg, 'delDirs: {}\n# delFiles: {}\n# newDirs: {}\n# newFiles: {}\n', delDirs, delFiles, newDirs, newFiles)
+
+    keepmes = set()
+    def emitDeleteAndKeepme(path):
+        # check if we need to emit placeholder to keep parent dir alive
+        parent = path.rpartition('/')[0]
+        if parent != '' and parent not in keepmes and emptyDir(parent, cfg, newTree):
+            keepmes.add(parent)
+            emitPlaceholder(parent)
+        emitDelete(path)
 
     # and finally -- write out resulting changes
     keepmes = set()
@@ -320,14 +328,9 @@ def exportTreeChanges(oldTree, newTree, cfg):
         if d == '':
             emitDeleteAll()
         else:
-            emitDelete(d)
+            emitDeleteAndKeepme(d)
     for f in delFiles:
-        # check if we need to emit placeholder to keep dir alive
-        base = f[0].rpartition('/')[0]
-        if base != '' and base not in keepmes and emptyDir(base, cfg, newTree):
-            keepmes.add(base)
-            emitPlaceholder(base)
-        emitDelete(f[0])
+        emitDeleteAndKeepme(f[0])
     for d in newDirs:
         exportSubTree(d, newTree, cfg)
     for f in newFiles:
