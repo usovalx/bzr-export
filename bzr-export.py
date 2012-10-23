@@ -7,7 +7,9 @@ import email.utils
 import getopt
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import time
 
 class Config(object):
@@ -16,6 +18,7 @@ class Config(object):
     def __init__(self):
         self.debug = False
         self.excludedFiles = set()
+        self.edits = dict()
         self.fname = None
         self.forceAll = False
         self.refName = None
@@ -93,6 +96,11 @@ def usage():
    -m      Load/save marks into this file.
    -x      Read a list of excluded files/directories. File is eval'd and should
            return python array of file names.
+   -e      Read a list of editing commands. File is eval's and shoud return python
+           dictionary. Keys of the dictionary are file names, and corresponding value
+           is command-line which would be run to edit the file. Command-line is
+           interpolated to replace single {} with the name of the file to edit.
+
 
 Both branch and shared repo can be provided as a source. In case of shared repo,
 all branches in it will be exported. If you are doing initial export you really
@@ -100,6 +108,12 @@ want to use -f, so that all branches are exported.
 
 Excludes specified via -x are matched against both files and directories. Don't try
 to force matching against directories by appending '/' -- it won't match at all.
+Example: [ "foo", "bar/buz", ]
+
+Editing commands specified via -e are only applied to REGULAR files. Directories or
+symlinks aren't editable. Edits should normally be stable. If the editing command
+exits with non-zero return value export is aborted.
+Example: { "foo": "sed -e 's/foo_string/bar_string/g' -i {}" }
 
 Resulting fast-export stream is sent to standard output.
 """
@@ -109,7 +123,7 @@ Resulting fast-export stream is sent to standard output.
 def main(argv):
     # parse command-line flags
     try:
-        opts, args = getopt.getopt(argv, 'fhdm:b:x:')
+        opts, args = getopt.getopt(argv, 'fhdm:b:x:e:')
     except getopt.GetoptError as e:
         err(e)
 
@@ -129,10 +143,15 @@ def main(argv):
         elif o == '-b':
             cfg.refName = v
         elif o == '-x':
-            f = open(v, "r")
+            f = open(v, 'r')
             x = eval(f.read())
-            cfg.excludedFiles = set(x)
             f.close()
+            cfg.excludedFiles = set(x)
+        elif o == '-e':
+            f = open(v, 'r')
+            x = eval(f.read())
+            f.close()
+            cfg.edits = dict(x)
         else:
             usage()
 
@@ -334,7 +353,7 @@ def exportTreeChanges(oldTree, newTree, cfg):
     for d in newDirs:
         exportSubTree(d, newTree, cfg)
     for f in newFiles:
-        emitFile(f[0], f[1], f[2], newTree)
+        emitFile(f[0], f[1], f[2], newTree, cfg)
 
 def exportSubTree(path, tree, cfg):
     for item in tree.walkdirs(prefix=path):
@@ -355,7 +374,7 @@ def exportSubTree(path, tree, cfg):
                     # skip dir entries -- we will step into them later
                     continue
                 else:
-                    emitFile(obj[0], obj[2], obj[4], tree)
+                    emitFile(obj[0], obj[2], obj[4], tree, cfg)
 
 def emitReset(ref, mark):
     if mark:
@@ -373,9 +392,11 @@ def emitCommitHeader(ref, mark, revobj, parents):
        fmt = 'from {}\n' + 'merge {}\n'*(len(parents)-1)
        out(fmt, *parents)
 
-def emitFile(path, kind, fileId, tree):
+def emitFile(path, kind, fileId, tree, cfg):
     if kind == 'file':
         data = tree.get_file_text(fileId)
+        if path in cfg.edits:
+            data = editFile(path, cfg.edits[path], data)
         if tree.is_executable(fileId):
             mode = '755'
         else:
@@ -404,6 +425,21 @@ def emptyDir(path, cfg, tree):
         # filter out excluded entries and check if it's empty
         r = filter(lambda t: t[0] not in cfg.excludedFiles, x[1])
         return len(r) == 0
+
+def editFile(path, command, data):
+    t = tempfile.NamedTemporaryFile(mode='w+b', delete=False)
+    t.file.write(data)
+    t.close()
+    ret = subprocess.call(command.format(t.name), shell=True, stdout=sys.stderr)
+    if ret != 0:
+        err('Command {!r} exited with error code {}; leaving temporary file in place', command.format(f.name), ret)
+    else:
+        # reopen temp file, as editing command might have replaced it
+        f = open(t.name, "rb")
+        data = f.read()
+        f.close()
+        os.unlink(t.name)
+        return data
 
 def formatTimestamp(timestamp, offset):
     if offset < 0:
