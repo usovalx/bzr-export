@@ -433,7 +433,7 @@ def emitFile(buf, path, kind, fileId, tree, cfg):
         data = tree.get_symlink_target(fileId)
         out(buf, 'M {} inline {}\ndata {}\n{}\n', mode, formatPath(path), len(data), data)
     else:
-        log("WARN: unsupported file kind '{}' in {} path {}", kind, tree.get_revision_id(), path)
+        log("WARN: unsupported file kind '{}' in {} path {}", kind, tree.get_revision_id(), formatPath(path))
         return
 
 def emitPlaceholder(buf, path):
@@ -457,7 +457,7 @@ def editFile(path, command, data):
     t.close()
     ret = subprocess.call(command.format(t.name), shell=True, stdout=sys.stderr)
     if ret != 0:
-        err('Command {!r} exited with error code {}; leaving temporary file in place', command.format(f.name), ret)
+        err('Command {!r} exited with error code {}; leaving temporary file in place', command.format(t.name), ret)
     else:
         # reopen temp file, as editing command might have replaced it
         f = open(t.name, "rb")
@@ -485,7 +485,7 @@ def formatName(name):
         else:
             return '%s <%s>' % (name, mail)
     else:
-        return '%s <>' % name
+        return '%s <>' % name.encode('utf8')
 
 def formatPath(path):
     assert(path is not None)
