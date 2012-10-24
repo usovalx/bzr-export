@@ -5,6 +5,7 @@ from bzrlib import errors as berrors
 import datetime
 import email.utils
 import getopt
+import hashlib
 import os
 import re
 import subprocess
@@ -193,7 +194,9 @@ def exportBranch(branch, ref, cfg):
     try:
         if cfg.getMark(branch.last_revision()):
             if cfg.forceAll:
-                emitReset(ref, cfg.getMark(branch.last_revision()))
+                buf = []
+                emitReset(buf, ref, cfg.getMark(branch.last_revision()))
+                writeBuffer(buf)
             else:
                 log("Nothing to do: no new revisions")
         else:
@@ -223,24 +226,29 @@ def exportCommit(revid, ref, branch, cfg):
         log('WARN: encountered ghost revision  {}', revid)
         return
 
+    # buffer up commit details, so that we can write out file blobs
+    # before actual commit goes on the wire
+    buf = []
+
     parents = rev.parent_ids
     if len(parents) == 0:
         parentRev = revision.NULL_REVISION
-        emitReset(ref, None)
+        emitReset(buf, ref, None)
     else:
         parentRev = parents[0]
 
-    debug(cfg, 'committer: {}\n', rev.committer.encode('utf8'))
+    debug(buf, cfg, 'committer: {}\n', rev.committer.encode('utf8'))
 
     thisMark = cfg.newMark(revid)
     parentsMarks = map(cfg.getMark, parents)
     assert(all(parentsMarks)) # FIXME: check that all parents are present in marks
-    emitCommitHeader(ref, thisMark, rev, parentsMarks)
+    emitCommitHeader(buf, ref, thisMark, rev, parentsMarks)
     oldTree, newTree = map(branch.repository.revision_tree, [parentRev, revid])
-    exportTreeChanges(oldTree, newTree, cfg)
-    out('\n')
+    exportTreeChanges(buf, oldTree, newTree, cfg)
+    out(buf, '\n')
+    writeBuffer(buf)
 
-def exportTreeChanges(oldTree, newTree, cfg):
+def exportTreeChanges(buf, oldTree, newTree, cfg):
     # In general case exporting changes from bzr is highly nontrivial
     # bzr is tracking each file & directory by internal ids.
     # If you want to preserve history correctly you are forced to do some
@@ -277,7 +285,7 @@ def exportTreeChanges(oldTree, newTree, cfg):
         # c is a tuple (file_id, (path_in_source, path_in_target),
         #    changed_content, versioned, parent, name, kind,
         #    executable)
-        debug(cfg, 'change: {}\n', c)
+        debug(buf, cfg, 'change: {}\n', c)
         if c[1][0] is None:  # stuff added
             assert(c[6][0] is None)
             assert(c[1][1] is not None and c[6][1] is not None)
@@ -330,40 +338,40 @@ def exportTreeChanges(oldTree, newTree, cfg):
     newDirs = cleanDirs(newDirs)
     delFiles = cleanFiles(delDirs, delFiles)
     newFiles = cleanFiles(newDirs, newFiles)
-    debug(cfg, 'delDirs: {}\n# delFiles: {}\n# newDirs: {}\n# newFiles: {}\n', delDirs, delFiles, newDirs, newFiles)
+    debug(buf, cfg, 'delDirs: {}\n# delFiles: {}\n# newDirs: {}\n# newFiles: {}\n', delDirs, delFiles, newDirs, newFiles)
 
     keepmes = set()
-    def emitDeleteAndKeepme(path):
+    def emitDeleteAndKeepme(buf, path):
         # check if we need to emit placeholder to keep parent dir alive
         parent = path.rpartition('/')[0]
         if parent != '' and parent not in keepmes and emptyDir(parent, cfg, newTree):
             keepmes.add(parent)
-            emitPlaceholder(parent)
-        emitDelete(path)
+            emitPlaceholder(buf, parent)
+        emitDelete(buf, path)
 
     # and finally -- write out resulting changes
     keepmes = set()
     for d in delDirs:
         if d == '':
-            emitDeleteAll()
+            emitDeleteAll(buf)
         else:
-            emitDeleteAndKeepme(d)
+            emitDeleteAndKeepme(buf, d)
     for f in delFiles:
-        emitDeleteAndKeepme(f[0])
+        emitDeleteAndKeepme(buf, f[0])
     for d in newDirs:
-        exportSubTree(d, newTree, cfg)
+        exportSubTree(buf, d, newTree, cfg)
     for f in newFiles:
-        emitFile(f[0], f[1], f[2], newTree, cfg)
+        emitFile(buf, f[0], f[1], f[2], newTree, cfg)
 
-def exportSubTree(path, tree, cfg):
+def exportSubTree(buf, path, tree, cfg):
     for item in tree.walkdirs(prefix=path):
-        # we need to update it in-place to prevent it from walking into excluded items
+        # we need to update item[1] in-place to prevent it from walking into excluded subdirs
         excludes = filter(lambda x: x[0] in cfg.excludedFiles, item[1])
         for x in excludes:
             item[1].remove(x)
         if len(item[1]) == 0:
             # empty dir -- write placeholder to keep it alive
-            emitPlaceholder(item[0][0])
+            emitPlaceholder(buf, item[0][0])
         else:
             for obj in item[1]:
                 # obj is (relpath, basename, kind, lstat?, file_id, versioned_kind)
@@ -374,51 +382,68 @@ def exportSubTree(path, tree, cfg):
                     # skip dir entries -- we will step into them later
                     continue
                 else:
-                    emitFile(obj[0], obj[2], obj[4], tree, cfg)
+                    emitFile(buf, obj[0], obj[2], obj[4], tree, cfg)
 
-def emitReset(ref, mark):
-    if mark:
-        out('reset {0:s}\nfrom {1:s}\n\n', ref, mark)
+def emitReset(buf, ref, mark):
+    if mark is not None:
+        out(buf, 'reset {0:s}\nfrom {1:s}\n\n', ref, mark)
     else:
-        out('reset {0:s}\n\n', ref)
+        out(buf, 'reset {0:s}\n\n', ref)
 
-def emitCommitHeader(ref, mark, revobj, parents):
+def emitCommitHeader(buf, ref, mark, revobj, parents):
     headF = 'commit {}\nmark {}\ncommitter {} {}\n'
-    out(headF, ref, mark, formatName(revobj.committer), formatTimestamp(revobj.timestamp, revobj.timezone))
+    out(buf, headF, ref, mark, formatName(revobj.committer), formatTimestamp(revobj.timestamp, revobj.timezone))
     msg = revobj.message.encode('utf8')
     msg += '\n\nBazaar: revid:%s' % revobj.revision_id
-    out('data {}\n{:s}\n', len(msg), msg)
+    out(buf, 'data {}\n{:s}\n', len(msg), msg)
     if len(parents) != 0:
        fmt = 'from {}\n' + 'merge {}\n'*(len(parents)-1)
-       out(fmt, *parents)
+       out(buf, fmt, *parents)
 
-def emitFile(path, kind, fileId, tree, cfg):
+def emitFile(buf, path, kind, fileId, tree, cfg):
     if kind == 'file':
-        data = tree.get_file_text(fileId)
-        if path in cfg.edits:
-            data = editFile(path, cfg.edits[path], data)
+        mode = '644'
         if tree.is_executable(fileId):
             mode = '755'
-        else:
-            mode = '644'
+        sha = tree.get_file_sha1(fileId)
+        assert(sha is not None and sha != '')
+        # Caching files in presence of editing is a bit tricky.
+        # We need to make sure that we don't use edited content where
+        # original file should go nor mix up edited content from
+        # different edit commands.
+        # What we do -- to cached edited file we store it under a key
+        # which includes both the hash of the original file and the
+        # hash of the editing command we use.
+        # This relies on editing being stable.
+        editCmd = cfg.edits.get(path, None)
+        if editCmd:
+            hasher = hashlib.sha1()
+            hasher.update(editCmd)
+            sha = 'EDITED-' + sha + '-' + hasher.hexdigest()
+        mark = cfg.getMark(sha)
+        if mark is None:
+            mark = cfg.newMark(sha)
+            data = tree.get_file_text(fileId)
+            if editCmd:
+                data = editFile(path, editCmd, data)
+            writeOut('blob\nmark {}\ndata {}\n{}\n'.format(mark, len(data), data))
+        out(buf, 'M {} {} {}\n', mode, mark, formatPath(path))
     elif kind == 'symlink':
         mode = '120000'
         data = tree.get_symlink_target(fileId)
+        out(buf, 'M {} inline {}\ndata {}\n{}\n', mode, formatPath(path), len(data), data)
     else:
         log("WARN: unsupported file kind '{}' in {} path {}", kind, tree.get_revision_id(), path)
         return
 
-    # fixme quote filename
-    out('M {} inline {}\ndata {}\n{}\n', mode, formatPath(path), len(data), data)
+def emitPlaceholder(buf, path):
+    out(buf, 'M 644 inline {}\ndata 0\n', formatPath(path + '/.keepme'))
 
-def emitPlaceholder(path):
-    out('M 644 inline {}\ndata 0\n', formatPath(path + '/.keepme'))
+def emitDelete(buf, path):
+    out(buf, 'D {}\n', formatPath(path))
 
-def emitDelete(path):
-    out('D {}\n', formatPath(path))
-
-def emitDeleteAllout():
-    out('deleteall\n')
+def emitDeleteAll(buf):
+    out(buf, 'deleteall\n')
 
 def emptyDir(path, cfg, tree):
     for x in tree.walkdirs(prefix=path):
@@ -427,7 +452,7 @@ def emptyDir(path, cfg, tree):
         return len(r) == 0
 
 def editFile(path, command, data):
-    t = tempfile.NamedTemporaryFile(mode='w+b', delete=False)
+    t = tempfile.NamedTemporaryFile(mode='wb', delete=False)
     t.file.write(data)
     t.close()
     ret = subprocess.call(command.format(t.name), shell=True, stdout=sys.stderr)
@@ -502,6 +527,12 @@ def formatRefName(branchName):
         "_", refname)
     return refname
 
+def writeBuffer(buf):
+    writeOut(''.join(buf))
+
+def writeOut(data):
+    sys.stdout.write(data)
+
 def log(f, *args):
     sys.stderr.write((str(f) + '\n').format(*args))
 
@@ -509,12 +540,12 @@ def err(f, *args):
     log('ERROR: ' + str(f), *args)
     sys.exit(1)
 
-def out(f, *args):
-    sys.stdout.write(f.format(*args))
+def out(buf, f, *args):
+    buf.append(f.format(*args))
 
-def debug(cfg, f, *args):
+def debug(buf, cfg, f, *args):
     if cfg.debug:
-        out("# " + f, *args)
+        out(buf, "# " + f, *args)
 
 def prof():
     import cProfile
