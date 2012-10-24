@@ -158,6 +158,7 @@ def main(argv):
 
     # proceed to export
     startExport(args[0], cfg)
+    cfg.save()
 
 def startExport(path, cfg):
     # try opening it as branch
@@ -212,7 +213,6 @@ def exportBranch(branch, ref, cfg):
                 stats.exported()
                 if stats._exported % 5000 == 0:
                     log("{}", stats)
-            cfg.save()
             log("Finished export: {}", stats)
     finally:
         lockobj.unlock()
