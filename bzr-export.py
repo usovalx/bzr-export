@@ -20,9 +20,10 @@ class Config(object):
         self.debug = False
         self.excludedFiles = set()
         self.edits = dict()
-        self.fname = None
         self.forceAll = False
+        self.fname = None
         self.refName = None
+        self.stats = None
 
         self.nextMark = 1
         self.marks = {}
@@ -69,22 +70,78 @@ class Config(object):
         return self.marks.get(revid, None)
 
 class Stats(object):
-    def __init__(self):
-        self._skipped = 0
-        self._exported = 0
+    def __init__(self, prev = None):
+        # stats for this export
+        self._skippedRevs = 0
+        self._exportedRevs = 0
+        self._skippedFiles = 0
+        self._exportedFiles = 0
+        self._bytes = 0
         self._starttime = time.time()
+        self._lasttime = None
+
+        # total stats
+        if prev:
+            self._totalSkippedRevs = prev._totalSkippedRevs
+            self._totalExportedRevs = prev._totalExportedRevs
+            self._totalSkippedFiles = prev._totalSkippedFiles
+            self._totalExportedFiles = prev._totalExportedFiles
+            self._totalBytes = prev._totalBytes
+            # total time in previous should be up-to-date
+            # given that we write out final stats after exporting branch this should be ok
+            self._totalTime = prev._totalTime
+        else:
+            self._totalSkippedRevs = 0
+            self._totalExportedRevs = 0
+            self._totalSkippedFiles = 0
+            self._totalExportedFiles = 0
+            self._totalBytes = 0
+            self._totalTime = 0
 
     def __str__(self):
         now = time.time()
-        dur = datetime.timedelta(seconds = now - self._starttime)
-        return "{} exported {} reused, time spent {} ({} revision/minute)".format(
-            self._exported, self._skipped, dur, int(self._exported*60/(now - self._starttime)))
+        if self._lasttime:
+            self._totalTime += now - self._lasttime
+        else:
+            self._totalTime += now - self._starttime
+        self._lasttime = now
+        dur = time.time() - self._starttime
+        s = "{}(+{} cached) revs, {}(+{} cached) files, {} Mbytes in {}; {} revs/min {} Mbytes/min"
+        s = s.format(self._exportedRevs, self._skippedRevs,
+                     self._exportedFiles, self._skippedFiles,
+                     self._bytes/1024/1024,
+                     datetime.timedelta(seconds = dur),
+                     int(self._exportedRevs/(dur/60)),
+                     int(self._bytes/1024/1024/(dur/60)))
+        return s
 
-    def skipped(self):
-        self._skipped += 1
+    def totals(self):
+        dur = self._totalTime
+        s = "Total: {}(+{} cached) revs, {}(+{} cached) files, {} Mbytes in {}; {} revs/min {} Mbytes/min"
+        return s.format(self._totalExportedRevs, self._totalSkippedRevs,
+                     self._totalExportedFiles, self._totalSkippedFiles,
+                     self._totalBytes/1024/1024,
+                     datetime.timedelta(seconds = dur),
+                     int(self._totalExportedRevs/(dur/60)),
+                     int(self._totalBytes/1024/1024/(dur/60)))
 
-    def exported(self):
-        self._exported += 1
+    def skipRev(self):
+        self._skippedRevs += 1
+        self._totalSkippedRevs += 1
+
+    def exportRev(self):
+        self._exportedRevs += 1
+        self._totalExportedRevs += 1
+
+    def skipFile(self):
+        self._skippedFiles += 1
+        self._totalSkippedFiles += 1
+
+    def exportFile(self, size):
+        self._exportedFiles += 1
+        self._totalExportedFiles += 1
+        self._bytes += size
+        self._totalBytes += size
 
 def usage():
     m = """Usage: bzr-export.py [-h] [-f] [-d] [-m <marks file>] [-x <excludes>] <path>
@@ -158,6 +215,8 @@ def main(argv):
 
     # proceed to export
     startExport(args[0], cfg)
+    if cfg.stats:
+        log(cfg.stats.totals())
     cfg.save()
 
 def startExport(path, cfg):
@@ -204,16 +263,16 @@ def exportBranch(branch, ref, cfg):
             # get full history of the branch
             hist = [x[0] for x in branch.iter_merge_sorted_revisions(direction='forward')]
             log('Starting export of {0:d} revisions', len(hist))
-            stats = Stats()
+            cfg.stats = Stats(cfg.stats)
             for revid in hist:
                 if cfg.getMark(revid):
-                    stats.skipped()
+                    cfg.stats.skipRev()
                     continue
                 exportCommit(revid, ref, branch, cfg)
-                stats.exported()
-                if stats._exported % 5000 == 0:
-                    log("{}", stats)
-            log("Finished export: {}", stats)
+                cfg.stats.exportRev()
+                if cfg.stats._exportedRevs % 5000 == 0:
+                    log("{}", cfg.stats)
+            log("Finished export: {}", cfg.stats)
     finally:
         lockobj.unlock()
 
@@ -427,6 +486,9 @@ def emitFile(buf, path, kind, fileId, tree, cfg):
             if editCmd:
                 data = editFile(path, editCmd, data)
             writeOut('blob\nmark {}\ndata {}\n{}\n'.format(mark, len(data), data))
+            cfg.stats.exportFile(len(data))
+        else:
+            cfg.stats.skipFile()
         out(buf, 'M {} {} {}\n', mode, mark, formatPath(path))
     elif kind == 'symlink':
         mode = '120000'
