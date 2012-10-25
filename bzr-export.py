@@ -582,7 +582,7 @@ class Stats(object):
             self._totalTime += now - self._starttime
         self._lasttime = now
         dur = time.time() - self._starttime
-        s = "{}(+{} cached) revs, {}(+{} cached) files, {} Mbytes in {}; {} revs/min {} Mbytes/min"
+        s = "{}(+{}) revs, {}(+{}) files, {} Mb in {}; {} revs/min {} Mb/min"
         s = s.format(self._exportedRevs, self._skippedRevs,
                      self._exportedFiles, self._skippedFiles,
                      self._bytes/1024/1024,
@@ -593,7 +593,7 @@ class Stats(object):
 
     def totals(self):
         dur = self._totalTime
-        s = "Total: {}(+{} cached) revs, {}(+{} cached) files, {} Mbytes in {}; {} revs/min {} Mbytes/min"
+        s = "Total: {}(+{}) revs, {}(+{}) files, {} Mb in {}; {} revs/min {} Mb/min"
         return s.format(self._totalExportedRevs, self._totalSkippedRevs,
                      self._totalExportedFiles, self._totalSkippedFiles,
                      self._totalBytes/1024/1024,
