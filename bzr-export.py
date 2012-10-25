@@ -13,136 +13,6 @@ import sys
 import tempfile
 import time
 
-class Config(object):
-    """Misc stuff here -- various config flags & marks management"""
-
-    def __init__(self):
-        self.debug = False
-        self.excludedFiles = set()
-        self.edits = dict()
-        self.forceAll = False
-        self.fname = None
-        self.refName = None
-        self.stats = None
-
-        self.nextMark = 1
-        self.marks = {}
-
-    def load(self, fname):
-        self.fname = fname
-        if os.path.exists(fname):
-            f = open(fname, "r")
-            maxMark = 1
-            for l in f:
-                s = l.split()
-                if len(s) == 0:
-                    continue
-                if len(s) != 2:
-                    log("ERROR: this doesn't looks like marks string: {}", l.strip())
-                    continue
-                maxMark = max(maxMark, int(s[0][1:]))
-                self.marks[s[1]] = s[0]
-            f.close()
-            self.nextMark = maxMark
-            log("Marks loaded: {} entries", len(self.marks))
-        else:
-            # try creating empty file, just to make sure we can write there
-            f = open(fname, "w")
-            f.close()
-
-    def save(self):
-        if self.fname is None:
-            return
-        f = open(self.fname, "w")
-        for r, m in self.marks.iteritems():
-            f.write('%s %s\n' % (m, r))
-        f.close()
-
-    def newMark(self, revid):
-        """Add new revision to the set and return its mark"""
-        m = ':{}'.format(self.nextMark)
-        self.marks[revid] = m
-        self.nextMark += 1
-        return m
-
-    def getMark(self, revid):
-        """Get a mark corresponding to revid. Returns None if revision isn't marked"""
-        return self.marks.get(revid, None)
-
-class Stats(object):
-    def __init__(self, prev = None):
-        # stats for this export
-        self._skippedRevs = 0
-        self._exportedRevs = 0
-        self._skippedFiles = 0
-        self._exportedFiles = 0
-        self._bytes = 0
-        self._starttime = time.time()
-        self._lasttime = None
-
-        # total stats
-        if prev:
-            self._totalSkippedRevs = prev._totalSkippedRevs
-            self._totalExportedRevs = prev._totalExportedRevs
-            self._totalSkippedFiles = prev._totalSkippedFiles
-            self._totalExportedFiles = prev._totalExportedFiles
-            self._totalBytes = prev._totalBytes
-            # total time in previous should be up-to-date
-            # given that we write out final stats after exporting branch this should be ok
-            self._totalTime = prev._totalTime
-        else:
-            self._totalSkippedRevs = 0
-            self._totalExportedRevs = 0
-            self._totalSkippedFiles = 0
-            self._totalExportedFiles = 0
-            self._totalBytes = 0
-            self._totalTime = 0
-
-    def __str__(self):
-        now = time.time()
-        if self._lasttime:
-            self._totalTime += now - self._lasttime
-        else:
-            self._totalTime += now - self._starttime
-        self._lasttime = now
-        dur = time.time() - self._starttime
-        s = "{}(+{} cached) revs, {}(+{} cached) files, {} Mbytes in {}; {} revs/min {} Mbytes/min"
-        s = s.format(self._exportedRevs, self._skippedRevs,
-                     self._exportedFiles, self._skippedFiles,
-                     self._bytes/1024/1024,
-                     datetime.timedelta(seconds = dur),
-                     int(self._exportedRevs/(dur/60)),
-                     int(self._bytes/1024/1024/(dur/60)))
-        return s
-
-    def totals(self):
-        dur = self._totalTime
-        s = "Total: {}(+{} cached) revs, {}(+{} cached) files, {} Mbytes in {}; {} revs/min {} Mbytes/min"
-        return s.format(self._totalExportedRevs, self._totalSkippedRevs,
-                     self._totalExportedFiles, self._totalSkippedFiles,
-                     self._totalBytes/1024/1024,
-                     datetime.timedelta(seconds = dur),
-                     int(self._totalExportedRevs/(dur/60)),
-                     int(self._totalBytes/1024/1024/(dur/60)))
-
-    def skipRev(self):
-        self._skippedRevs += 1
-        self._totalSkippedRevs += 1
-
-    def exportRev(self):
-        self._exportedRevs += 1
-        self._totalExportedRevs += 1
-
-    def skipFile(self):
-        self._skippedFiles += 1
-        self._totalSkippedFiles += 1
-
-    def exportFile(self, size):
-        self._exportedFiles += 1
-        self._totalExportedFiles += 1
-        self._bytes += size
-        self._totalBytes += size
-
 def usage():
     m = """Usage: bzr-export.py [-h] [-f] [-d] [-m <marks file>] [-x <excludes>] <path>
 
@@ -618,6 +488,136 @@ def prof():
         cProfile.run('main(["/home/usov/build/testrepo/docky/trunk"])', "prof")
     finally:
         sys.stdout = save
+
+class Config(object):
+    """Misc stuff here -- various config flags & marks management"""
+
+    def __init__(self):
+        self.debug = False
+        self.excludedFiles = set()
+        self.edits = dict()
+        self.forceAll = False
+        self.fname = None
+        self.refName = None
+        self.stats = None
+
+        self.nextMark = 1
+        self.marks = {}
+
+    def load(self, fname):
+        self.fname = fname
+        if os.path.exists(fname):
+            f = open(fname, "r")
+            maxMark = 1
+            for l in f:
+                s = l.split()
+                if len(s) == 0:
+                    continue
+                if len(s) != 2:
+                    log("ERROR: this doesn't looks like marks string: {}", l.strip())
+                    continue
+                maxMark = max(maxMark, int(s[0][1:]))
+                self.marks[s[1]] = s[0]
+            f.close()
+            self.nextMark = maxMark
+            log("Marks loaded: {} entries", len(self.marks))
+        else:
+            # try creating empty file, just to make sure we can write there
+            f = open(fname, "w")
+            f.close()
+
+    def save(self):
+        if self.fname is None:
+            return
+        f = open(self.fname, "w")
+        for r, m in self.marks.iteritems():
+            f.write('%s %s\n' % (m, r))
+        f.close()
+
+    def newMark(self, revid):
+        """Add new revision to the set and return its mark"""
+        m = ':{}'.format(self.nextMark)
+        self.marks[revid] = m
+        self.nextMark += 1
+        return m
+
+    def getMark(self, revid):
+        """Get a mark corresponding to revid. Returns None if revision isn't marked"""
+        return self.marks.get(revid, None)
+
+class Stats(object):
+    def __init__(self, prev = None):
+        # stats for this export
+        self._skippedRevs = 0
+        self._exportedRevs = 0
+        self._skippedFiles = 0
+        self._exportedFiles = 0
+        self._bytes = 0
+        self._starttime = time.time()
+        self._lasttime = None
+
+        # total stats
+        if prev:
+            self._totalSkippedRevs = prev._totalSkippedRevs
+            self._totalExportedRevs = prev._totalExportedRevs
+            self._totalSkippedFiles = prev._totalSkippedFiles
+            self._totalExportedFiles = prev._totalExportedFiles
+            self._totalBytes = prev._totalBytes
+            # total time in previous should be up-to-date
+            # given that we write out final stats after exporting branch this should be ok
+            self._totalTime = prev._totalTime
+        else:
+            self._totalSkippedRevs = 0
+            self._totalExportedRevs = 0
+            self._totalSkippedFiles = 0
+            self._totalExportedFiles = 0
+            self._totalBytes = 0
+            self._totalTime = 0
+
+    def __str__(self):
+        now = time.time()
+        if self._lasttime:
+            self._totalTime += now - self._lasttime
+        else:
+            self._totalTime += now - self._starttime
+        self._lasttime = now
+        dur = time.time() - self._starttime
+        s = "{}(+{} cached) revs, {}(+{} cached) files, {} Mbytes in {}; {} revs/min {} Mbytes/min"
+        s = s.format(self._exportedRevs, self._skippedRevs,
+                     self._exportedFiles, self._skippedFiles,
+                     self._bytes/1024/1024,
+                     datetime.timedelta(seconds = dur),
+                     int(self._exportedRevs/(dur/60)),
+                     int(self._bytes/1024/1024/(dur/60)))
+        return s
+
+    def totals(self):
+        dur = self._totalTime
+        s = "Total: {}(+{} cached) revs, {}(+{} cached) files, {} Mbytes in {}; {} revs/min {} Mbytes/min"
+        return s.format(self._totalExportedRevs, self._totalSkippedRevs,
+                     self._totalExportedFiles, self._totalSkippedFiles,
+                     self._totalBytes/1024/1024,
+                     datetime.timedelta(seconds = dur),
+                     int(self._totalExportedRevs/(dur/60)),
+                     int(self._totalBytes/1024/1024/(dur/60)))
+
+    def skipRev(self):
+        self._skippedRevs += 1
+        self._totalSkippedRevs += 1
+
+    def exportRev(self):
+        self._exportedRevs += 1
+        self._totalExportedRevs += 1
+
+    def skipFile(self):
+        self._skippedFiles += 1
+        self._totalSkippedFiles += 1
+
+    def exportFile(self, size):
+        self._exportedFiles += 1
+        self._totalExportedFiles += 1
+        self._bytes += size
+        self._totalBytes += size
 
 if __name__ == '__main__':
     main(sys.argv[1:])
