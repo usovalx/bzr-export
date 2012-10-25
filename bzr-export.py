@@ -164,7 +164,7 @@ def exportBranch(branch, ref, cfg):
                     continue
                 exportCommit(revid, ref, branch, cfg)
                 cfg.stats.exportRev()
-                if cfg.stats._exportedRevs % 5000 == 0:
+                if cfg.stats._exportedRevs % 1000 == 0:
                     log("{}", cfg.stats)
             log("Finished export: {}", cfg.stats)
     finally:
