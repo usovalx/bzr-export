@@ -14,16 +14,33 @@ import tempfile
 import time
 
 def usage():
-    m = """Usage: bzr-export.py [-h] [-f] [-d] [-m <marks file>] [-x <excludes>] <path>
+    m = """Usage: bzr-export.py [flags] <path to repo or branch>
 
    -h      Show this message.
+
    -b      Branch name for git.
            Only used when exporting single branch, not a shared repo.
+
+   --export=<RE>
+           Limit the branches in the repository which are going to be exported.
+           RE is a regular expression and it will be matched against full branch
+           name (e.g. branch path relative to the repo root).
+           Only used when exporting whole repository.
+
+   --skip=<RE>
+           Don't export branches whose name matches given RE. Matching is done
+           similarly to --only.
+           Only used when exporting whole repository.
+
    -f      Force export of all branches, even if they are cached in marks.
+
    -d      Debugging. Writes some debug info as comments in the resulting stream.
+
    -m      Load/save marks into this file.
+
    -x      Read a list of excluded files/directories. File is eval'd and should
            return python array of file names.
+
    -e      Read a list of editing commands. File is eval's and shoud return python
            dictionary. Keys of the dictionary are file names, and corresponding value
            is command-line which would be run to edit the file. Command-line is
@@ -51,7 +68,7 @@ Resulting fast-export stream is sent to standard output.
 def main(argv):
     # parse command-line flags
     try:
-        opts, args = getopt.getopt(argv, 'fhdm:b:x:e:')
+        opts, args = getopt.getopt(argv, 'fhdm:b:x:e:', ['help', 'export=', 'skip='])
     except getopt.GetoptError as e:
         err(e)
 
@@ -60,7 +77,7 @@ def main(argv):
 
     cfg = Config()
     for o, v in opts:
-        if o == '-h':
+        if o == '-h' or o == '--help':
             usage()
         elif o == '-m':
             cfg.load(v)
@@ -80,6 +97,10 @@ def main(argv):
             x = eval(f.read())
             f.close()
             cfg.edits = dict(x)
+        elif o == '--export':
+            cfg.exportBranchRe = re.compile(v)
+        elif o == '--skip':
+            cfg.skipBranchRe = re.compile(v)
         else:
             usage()
 
@@ -114,6 +135,9 @@ def startExport(path, cfg):
                 log("ERROR: skipping this branch")
                 continue
             prevRefs.add(ref)
+            if not cfg.exportBranchRe.search(name) or cfg.skipBranchRe.search(name):
+                log("INFO: not exporting branch {}.", name)
+                continue
             exportBranch(b, ref, cfg)
     except berrors.BzrError as e:
         err(e)
@@ -500,6 +524,10 @@ class Config(object):
         self.fname = None
         self.refName = None
         self.stats = None
+
+        self.exportBranchRe = re.compile(r'.*')
+        # empty branch names don't make sence, so it's a safe default choice
+        self.skipBranchRe = re.compile(r'^$')
 
         self.nextMark = 1
         self.marks = {}
