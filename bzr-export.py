@@ -44,7 +44,7 @@ def usage():
    -e      Read a list of editing commands. File is eval's and shoud return python
            dictionary. Keys of the dictionary are file names, and corresponding value
            is command-line which would be run to edit the file. Command-line is
-           interpolated to replace single {} with the name of the file to edit.
+           interpolated to replace {0} with the name of the file to edit.
 
 
 Both branch and shared repo can be provided as a source. In case of shared repo,
@@ -58,7 +58,7 @@ Example: [ "foo", "bar/buz", ]
 Editing commands specified via -e are only applied to REGULAR files. Directories or
 symlinks aren't editable. Edits should normally be stable. If the editing command
 exits with non-zero return value export is aborted.
-Example: { "foo": "sed -e 's/foo_string/bar_string/g' -i {}" }
+Example: { "foo": "sed -e 's/foo_string/bar_string/g' -i {0}" }
 
 Resulting fast-export stream is sent to standard output.
 """
@@ -131,14 +131,14 @@ def startExport(path, cfg):
             ref = formatRefName(name)
             if ref in prevRefs:
                 log("ERROR: refname rewriting resulted in colliding refnames.")
-                log("ERROR: ref {} for branch {}", ref, b.user_url)
+                log("ERROR: ref {0} for branch {1}", ref, b.user_url)
                 log("ERROR: skipping this branch")
                 continue
             prevRefs.add(ref)
             if not cfg.exportBranchRe.search(name) or cfg.skipBranchRe.search(name):
                 continue
             toExport.append((ref, b))
-        log("Selected {} brances for export (out of {} in repo)", len(toExport), len(allBranches))
+        log("Selected {0} brances for export (out of {1} in repo)", len(toExport), len(allBranches))
         exportBranches(toExport, repo, cfg)
     except berrors.BzrError as e:
         err(e)
@@ -164,7 +164,7 @@ def exportBranches(branches, repo, cfg):
         # filter out branches with bad heads
         branches, badHeads = split(lambda b: b[0] in revisions, branches)
         for head, ref, b in badHeads:
-            log("WARN: {} -- invalid or empty head ({})", ref, head)
+            log("WARN: {0} -- invalid or empty head ({1})", ref, head)
 
     # now gather a list of revisions to export
     if branches:
@@ -172,32 +172,32 @@ def exportBranches(branches, repo, cfg):
         b, graph = collateNewHistory(branches, revisions, repo, cfg)
         branchesToExport.extend(b)
 
-        log("Got {} revisions to export. Sorting them", len(graph))
+        log("Got {0} revisions to export. Sorting them", len(graph))
         commitsToExport = tsort.topo_sort(graph)
 
     if commitsToExport:
         lock = repo.lock_read()
         try:
-            log("Starting export of {} revisions", len(commitsToExport))
+            log("Starting export of {0} revisions", len(commitsToExport))
             cfg.stats = Stats()
             for revid in commitsToExport:
                 if cfg.getMark(revid):
-                    log("WARN: we shouldn't be here. Revid: {}", revid)
+                    log("WARN: we shouldn't be here. Revid: {0}", revid)
                     cfg.stats.skipRev()
                     continue
                 exportCommit(revid, "__bzr_export_tmp_ref", repo, cfg)
                 cfg.stats.exportRev()
                 if cfg.stats._exportedRevs % 1000 == 0:
-                    log("{}", cfg.stats)
-            log("Finished: {}", cfg.stats)
+                    log("{0}", cfg.stats)
+            log("Finished: {0}", cfg.stats)
         finally:
             lock.unlock()
             pass
 
-    log("Writing {} branch references", len(branchesToExport))
+    log("Writing {0} branch references", len(branchesToExport))
     buf = []
     for head, ref, b in branchesToExport:
-        #log("Exporting branch {} as {} ({})", b.nick, ref, b.user_url)
+        #log("Exporting branch {0} as {1} ({2})", b.nick, ref, b.user_url)
         mark = cfg.getMark(head)
         assert(mark is not None) # it's good branches only
         emitReset(buf, ref, mark)
@@ -216,7 +216,7 @@ def collateNewHistory(branches, allRevs, repo, cfg):
             goodBranches.extend(chunk)
         else:
             if len(chunk) == 1:
-                log("WARN: skipping {} -- invalid history", chunk[0][1])
+                log("WARN: skipping {0} -- invalid history", chunk[0][1])
             else:
                 log("WARN: it seems there is a bad branch in there, subdividing")
                 branches.extend(chunkify(chunk, len(chunk)/3))
@@ -246,7 +246,7 @@ def exportCommit(revid, ref, repository, cfg):
     else:
         parentRev = parents[0]
 
-    debug(buf, cfg, 'committer: {}\n', rev.committer.encode('utf8'))
+    debug(buf, cfg, 'committer: {0}\n', rev.committer.encode('utf8'))
 
     thisMark = cfg.newMark(revid)
     parentsMarks = map(cfg.getMark, parents)
@@ -294,7 +294,7 @@ def exportTreeChanges(buf, oldTree, newTree, cfg):
         # c is a tuple (file_id, (path_in_source, path_in_target),
         #    changed_content, versioned, parent, name, kind,
         #    executable)
-        debug(buf, cfg, 'change: {}\n', c)
+        debug(buf, cfg, 'change: {0}\n', c)
         if c[1][0] is None:  # stuff added
             assert(c[6][0] is None)
             assert(c[1][1] is not None and c[6][1] is not None)
@@ -347,7 +347,7 @@ def exportTreeChanges(buf, oldTree, newTree, cfg):
     newDirs = cleanDirs(newDirs)
     delFiles = cleanFiles(delDirs, delFiles)
     newFiles = cleanFiles(newDirs, newFiles)
-    debug(buf, cfg, 'delDirs: {}\n# delFiles: {}\n# newDirs: {}\n# newFiles: {}\n', delDirs, delFiles, newDirs, newFiles)
+    debug(buf, cfg, 'delDirs: {0}\n# delFiles: {1}\n# newDirs: {2}\n# newFiles: {3}\n', delDirs, delFiles, newDirs, newFiles)
 
     keepmes = set()
     def emitDeleteAndKeepme(buf, path):
@@ -385,7 +385,7 @@ def exportSubTree(buf, path, tree, cfg):
             for obj in item[1]:
                 # obj is (relpath, basename, kind, lstat?, file_id, versioned_kind)
                 if not obj[2]: # I don't think this might ever happen, but....
-                    log("WARN: empty kind when walking tree of {}: subdir: {}", tree.get_revision_id(), item[0][0])
+                    log("WARN: empty kind when walking tree of {0}: subdir: {1}", tree.get_revision_id(), item[0][0])
                     continue
                 elif obj[2] == 'directory':
                     # skip dir entries -- we will step into them later
@@ -395,19 +395,20 @@ def exportSubTree(buf, path, tree, cfg):
 
 def emitReset(buf, ref, mark):
     if mark is not None:
-        out(buf, 'reset {0:s}\nfrom {1:s}\n\n', ref, mark)
+        out(buf, 'reset {0}\nfrom {1}\n\n', ref, mark)
     else:
-        out(buf, 'reset {0:s}\n\n', ref)
+        out(buf, 'reset {0}\n\n', ref)
 
 def emitCommitHeader(buf, ref, mark, revobj, parents):
-    headF = 'commit {}\nmark {}\ncommitter {} {}\n'
+    headF = 'commit {0}\nmark {1}\ncommitter {2} {3}\n'
     out(buf, headF, ref, mark, formatName(revobj.committer), formatTimestamp(revobj.timestamp, revobj.timezone))
     msg = revobj.message.encode('utf8')
     msg += '\n\nBazaar: revid:%s' % revobj.revision_id
-    out(buf, 'data {}\n{:s}\n', len(msg), msg)
+    out(buf, 'data {0}\n{1:s}\n', len(msg), msg)
     if len(parents) != 0:
-       fmt = 'from {}\n' + 'merge {}\n'*(len(parents)-1)
-       out(buf, fmt, *parents)
+        fmt = map(lambda i: 'merge {'+str(i)+'}\n', range(1, len(parents)))
+        fmt = "".join(['from {0}\n'] + fmt)
+        out(buf, fmt, *parents)
 
 def emitFile(buf, path, kind, fileId, tree, cfg):
     if kind == 'file':
@@ -435,24 +436,24 @@ def emitFile(buf, path, kind, fileId, tree, cfg):
             data = tree.get_file_text(fileId)
             if editCmd:
                 data = editFile(path, editCmd, data)
-            writeOut('blob\nmark {}\ndata {}\n{}\n'.format(mark, len(data), data))
+            writeOut('blob\nmark {0}\ndata {1}\n{2}\n'.format(mark, len(data), data))
             cfg.stats.exportFile(len(data))
         else:
             cfg.stats.skipFile()
-        out(buf, 'M {} {} {}\n', mode, mark, formatPath(path))
+        out(buf, 'M {0} {1} {2}\n', mode, mark, formatPath(path))
     elif kind == 'symlink':
         mode = '120000'
         data = tree.get_symlink_target(fileId)
-        out(buf, 'M {} inline {}\ndata {}\n{}\n', mode, formatPath(path), len(data), data)
+        out(buf, 'M {0} inline {1}\ndata {2}\n{3}\n', mode, formatPath(path), len(data), data)
     else:
-        log("WARN: unsupported file kind '{}' in {} path {}", kind, tree.get_revision_id(), formatPath(path))
+        log("WARN: unsupported file kind '{0}' in {1} path {2}", kind, tree.get_revision_id(), formatPath(path))
         return
 
 def emitPlaceholder(buf, path):
-    out(buf, 'M 644 inline {}\ndata 0\n', formatPath(path + '/.keepme'))
+    out(buf, 'M 644 inline {0}\ndata 0\n', formatPath(path + '/.keepme'))
 
 def emitDelete(buf, path):
-    out(buf, 'D {}\n', formatPath(path))
+    out(buf, 'D {0}\n', formatPath(path))
 
 def emitDeleteAll(buf):
     out(buf, 'deleteall\n')
@@ -469,7 +470,7 @@ def editFile(path, command, data):
     t.close()
     ret = subprocess.call(command.format(t.name), shell=True, stdout=sys.stderr)
     if ret != 0:
-        err('Command {!r} exited with error code {}; leaving temporary file in place', command.format(t.name), ret)
+        err('Command {0!r} exited with error code {1}; leaving temporary file in place', command.format(t.name), ret)
     else:
         # reopen temp file, as editing command might have replaced it
         f = open(t.name, "rb")
@@ -604,7 +605,7 @@ class Config(object):
         self.skipBranchRe = re.compile(r'^$')
 
         self.nextMark = 1
-        self.marks = {}
+        self.marks = dict()
 
     def load(self, fname):
         self.fname = fname
@@ -616,13 +617,13 @@ class Config(object):
                 if len(s) == 0:
                     continue
                 if len(s) != 2:
-                    log("ERROR: this doesn't looks like marks string: {}", l.strip())
+                    log("ERROR: this doesn't looks like marks string: {0}", l.strip())
                     continue
                 maxMark = max(maxMark, int(s[0][1:]))
                 self.marks[s[1]] = s[0]
             f.close()
             self.nextMark = maxMark
-            log("Marks loaded: {} entries", len(self.marks))
+            log("Marks loaded: {0} entries", len(self.marks))
         else:
             # try creating empty file, just to make sure we can write there
             f = open(fname, "w")
@@ -638,7 +639,7 @@ class Config(object):
 
     def newMark(self, revid):
         """Add new revision to the set and return its mark"""
-        m = ':{}'.format(self.nextMark)
+        m = ':{0}'.format(self.nextMark)
         self.marks[revid] = m
         self.nextMark += 1
         return m
@@ -659,7 +660,7 @@ class Stats(object):
 
     def __str__(self):
         dur = time.time() - self._starttime
-        s = "{}(+{}) revs, {}(+{}) files, {} Mb in {}; {} revs/min {} Mb/min"
+        s = "{0}(+{1}) revs, {2}(+{3}) files, {4} Mb in {5}; {6} revs/min {7} Mb/min"
         s = s.format(self._exportedRevs, self._skippedRevs,
                      self._exportedFiles, self._skippedFiles,
                      self._bytes/1024/1024,
