@@ -1,6 +1,6 @@
 #!/usr/bin/env python2
 
-from bzrlib import branch, bzrdir, revision, repository
+from bzrlib import branch, bzrdir, revision, repository, tsort
 from bzrlib import errors as berrors
 import datetime
 import email.utils
@@ -106,8 +106,6 @@ def main(argv):
 
     # proceed to export
     startExport(args[0], cfg)
-    if cfg.stats:
-        log(cfg.stats.totals())
     cfg.save()
 
 def startExport(path, cfg):
@@ -115,7 +113,7 @@ def startExport(path, cfg):
     try:
         b = branch.Branch.open(path)
         name = cfg.refName or b.user_url.rstrip('/').split('/')[-1]
-        exportBranch(b, formatRefName(name), cfg)
+        exportBranches([(formatRefName(name), b)], b.repository, cfg)
         return
     except berrors.NotBranchError:
         pass
@@ -123,9 +121,11 @@ def startExport(path, cfg):
     # or as shared repo
     try:
         repo = repository.Repository.open(path)
+        log("Gathering list of branches in repo")
+        allBranches = repo.find_branches()
+        toExport = []
         prevRefs = set()
-        bs = repo.find_branches()
-        for b in bs:
+        for b in allBranches:
             assert(b.user_url.startswith(repo.user_url))
             name = b.user_url[len(repo.user_url):].strip('/')
             ref = formatRefName(name)
@@ -136,53 +136,109 @@ def startExport(path, cfg):
                 continue
             prevRefs.add(ref)
             if not cfg.exportBranchRe.search(name) or cfg.skipBranchRe.search(name):
-                log("INFO: not exporting branch {}.", name)
                 continue
-            exportBranch(b, ref, cfg)
+            toExport.append((ref, b))
+        log("Selected {} brances for export (out of {} in repo)", len(toExport), len(allBranches))
+        exportBranches(toExport, repo, cfg)
     except berrors.BzrError as e:
         err(e)
 
-def exportBranch(branch, ref, cfg):
-    log('Exporting branch {0} as {1} ({2})', branch.nick, ref, branch.user_url)
-    lockobj = branch.lock_read()
-    try:
-        if cfg.getMark(branch.last_revision()):
-            if cfg.forceAll:
-                buf = []
-                emitReset(buf, ref, cfg.getMark(branch.last_revision()))
-                writeBuffer(buf)
-            else:
-                log("Nothing to do: no new revisions")
-        else:
-            # get full history of the branch
-            hist = [x[0] for x in branch.iter_merge_sorted_revisions(direction='forward')]
-            log('Starting export of {0:d} revisions', len(hist))
-            cfg.stats = Stats(cfg.stats)
-            for revid in hist:
+def exportBranches(branches, repo, cfg):
+    log("Collecting heads of all branches")
+    branches = [(b.last_revision(), ref, b) for ref, b in branches]
+
+    branchesToExport = []
+    commitsToExport = []
+
+    # if head is already in marks we don't need to do anything else
+    knownBranches, branches = split(lambda b: cfg.getMark(b[0]), branches)
+    if cfg.forceAll:
+        branchesToExport = knownBranches
+
+    # if there are new heads, lets download full list of revisions and try to
+    # figure out which revisions we need to export
+    if branches:
+        log("Getting list of all revisions")
+        revisions = set(repo.all_revision_ids())
+
+        # filter out branches with bad heads
+        branches, badHeads = split(lambda b: b[0] in revisions, branches)
+        for head, ref, b in badHeads:
+            log("WARN: {} -- invalid or empty head ({})", ref, head)
+
+    # now gather a list of revisions to export
+    if branches:
+        log("Collating a set of revisions to be exported")
+        b, graph = collateNewHistory(branches, revisions, repo, cfg)
+        branchesToExport.extend(b)
+
+        log("Got {} revisions to export. Sorting them", len(graph))
+        commitsToExport = tsort.topo_sort(graph)
+
+    if commitsToExport:
+        lock = repo.lock_read()
+        try:
+            log("Starting export of {} revisions", len(commitsToExport))
+            cfg.stats = Stats()
+            for revid in commitsToExport:
                 if cfg.getMark(revid):
+                    log("WARN: we shouldn't be here. Revid: {}", revid)
                     cfg.stats.skipRev()
                     continue
-                exportCommit(revid, ref, branch, cfg)
+                exportCommit(revid, "__bzr_export_tmp_ref", repo, cfg)
                 cfg.stats.exportRev()
                 if cfg.stats._exportedRevs % 1000 == 0:
                     log("{}", cfg.stats)
-            log("Finished export: {}", cfg.stats)
-    finally:
-        lockobj.unlock()
+            log("Finished: {}", cfg.stats)
+        finally:
+            lock.unlock()
+            pass
 
-def exportCommit(revid, ref, branch, cfg):
-    try:
-        rev = branch.repository.get_revision(revid)
-    except berrors.NoSuchRevision:
-        # ghost revision?
-        # that's what bzr fast-export plugin does, but I have no idea what these ghosts are
-        log('WARN: encountered ghost revision  {}', revid)
-        return
+    log("Writing {} branch references", len(branchesToExport))
+    buf = []
+    for head, ref, b in branchesToExport:
+        #log("Exporting branch {} as {} ({})", b.nick, ref, b.user_url)
+        mark = cfg.getMark(head)
+        assert(mark is not None) # it's good branches only
+        emitReset(buf, ref, mark)
+    writeBuffer(buf)
 
+def collateNewHistory(branches, allRevs, repo, cfg):
+    branches = chunkify(branches, 1000)
+    goodBranches = []
+    toExport = dict()
+    while branches:
+        chunk = branches.pop()
+        heads = [x[0] for x in chunk]
+        x = newRevs(heads, toExport, allRevs, repo, cfg)
+        if x:
+            toExport.update(x)
+            goodBranches.extend(chunk)
+        else:
+            if len(chunk) == 1:
+                log("WARN: skipping {} -- invalid history", chunk[0][1])
+            else:
+                log("WARN: it seems there is a bad branch in there, subdividing")
+                branches.extend(chunkify(chunk, len(chunk)/3))
+    return goodBranches, toExport
+
+def newRevs(revids, toExport, allRevs, repo, cfg):
+    toExport = dict(toExport) # temp copy in case stumble onto missing revision
+    while revids:
+        revids = filter(lambda r: not(r in toExport or cfg.getMark(r)), set(revids))
+        if any(map(lambda r: r not in allRevs, revids)):
+            return None
+        revs = repo.get_revisions(revids)
+        toExport.update([(r.revision_id, r.parent_ids) for r in revs])
+        revids = [x for r in revs for x in r.parent_ids]
+    return toExport
+
+def exportCommit(revid, ref, repository, cfg):
     # buffer up commit details, so that we can write out file blobs
     # before actual commit goes on the wire
     buf = []
 
+    rev = repository.get_revision(revid)
     parents = rev.parent_ids
     if len(parents) == 0:
         parentRev = revision.NULL_REVISION
@@ -196,7 +252,7 @@ def exportCommit(revid, ref, branch, cfg):
     parentsMarks = map(cfg.getMark, parents)
     assert(all(parentsMarks)) # FIXME: check that all parents are present in marks
     emitCommitHeader(buf, ref, thisMark, rev, parentsMarks)
-    oldTree, newTree = map(branch.repository.revision_tree, [parentRev, revid])
+    oldTree, newTree = map(repository.revision_tree, [parentRev, revid])
     exportTreeChanges(buf, oldTree, newTree, cfg)
     out(buf, '\n')
     writeBuffer(buf)
@@ -490,7 +546,8 @@ def writeOut(data):
     sys.stdout.write(data)
 
 def log(f, *args):
-    sys.stderr.write((str(f) + '\n').format(*args))
+    ts = time.strftime('%H:%M:%S ')
+    sys.stderr.write((ts + str(f) + '\n').format(*args))
 
 def err(f, *args):
     log('ERROR: ' + str(f), *args)
@@ -502,6 +559,23 @@ def out(buf, f, *args):
 def debug(buf, cfg, f, *args):
     if cfg.debug:
         out(buf, "# " + f, *args)
+
+def chunkify(l, size):
+    size = max(size, 1)
+    r = []
+    while len(l) != 0:
+        r.append(l[:size])
+        l = l[size:]
+    return r
+
+def split(fcn, l):
+    a, b = [], []
+    for x in l:
+        if fcn(x):
+            a.append(x)
+        else:
+            b.append(x)
+    return a, b
 
 def prof():
     import cProfile
@@ -582,33 +656,8 @@ class Stats(object):
         self._exportedFiles = 0
         self._bytes = 0
         self._starttime = time.time()
-        self._lasttime = None
-
-        # total stats
-        if prev:
-            self._totalSkippedRevs = prev._totalSkippedRevs
-            self._totalExportedRevs = prev._totalExportedRevs
-            self._totalSkippedFiles = prev._totalSkippedFiles
-            self._totalExportedFiles = prev._totalExportedFiles
-            self._totalBytes = prev._totalBytes
-            # total time in previous should be up-to-date
-            # given that we write out final stats after exporting branch this should be ok
-            self._totalTime = prev._totalTime
-        else:
-            self._totalSkippedRevs = 0
-            self._totalExportedRevs = 0
-            self._totalSkippedFiles = 0
-            self._totalExportedFiles = 0
-            self._totalBytes = 0
-            self._totalTime = 0
 
     def __str__(self):
-        now = time.time()
-        if self._lasttime:
-            self._totalTime += now - self._lasttime
-        else:
-            self._totalTime += now - self._starttime
-        self._lasttime = now
         dur = time.time() - self._starttime
         s = "{}(+{}) revs, {}(+{}) files, {} Mb in {}; {} revs/min {} Mb/min"
         s = s.format(self._exportedRevs, self._skippedRevs,
@@ -619,33 +668,18 @@ class Stats(object):
                      int(self._bytes/1024/1024/(dur/60)))
         return s
 
-    def totals(self):
-        dur = self._totalTime
-        s = "Total: {}(+{}) revs, {}(+{}) files, {} Mb in {}; {} revs/min {} Mb/min"
-        return s.format(self._totalExportedRevs, self._totalSkippedRevs,
-                     self._totalExportedFiles, self._totalSkippedFiles,
-                     self._totalBytes/1024/1024,
-                     datetime.timedelta(seconds = dur),
-                     int(self._totalExportedRevs/(dur/60)),
-                     int(self._totalBytes/1024/1024/(dur/60)))
-
     def skipRev(self):
         self._skippedRevs += 1
-        self._totalSkippedRevs += 1
 
     def exportRev(self):
         self._exportedRevs += 1
-        self._totalExportedRevs += 1
 
     def skipFile(self):
         self._skippedFiles += 1
-        self._totalSkippedFiles += 1
 
     def exportFile(self, size):
         self._exportedFiles += 1
-        self._totalExportedFiles += 1
         self._bytes += size
-        self._totalBytes += size
 
 if __name__ == '__main__':
     main(sys.argv[1:])
