@@ -24,12 +24,17 @@ def usage():
    --export=<RE>
            Limit the branches in the repository which are going to be exported.
            RE is a regular expression and it will be matched against full branch
-           name (e.g. branch path relative to the repo root).
+           name (e.g. branch path relative to the repo root). You can specify
+           this option multiple times.
            Only used when exporting whole repository.
 
    --skip=<RE>
            Don't export branches whose name matches given RE. Matching is done
-           similarly to --only.
+           similarly to --only. You can specify this option multiple times.
+           Only used when exporting whole repository.
+
+   --branches=<file>
+           Include/exclude rules for branches are read from the file.
            Only used when exporting whole repository.
 
    -f      Force export of all branches, even if they are cached in marks.
@@ -53,12 +58,23 @@ want to use -f, so that all branches are exported.
 
 Excludes specified via -x are matched against both files and directories. Don't try
 to force matching against directories by appending '/' -- it won't match at all.
-Example: [ "foo", "bar/buz", ]
+Example file:
+  [ "foo", "bar/buz", ]
+
+A larger set of include/exclude rules for branches can be specified via --branches.
+These rules end up in the same pile as the one specifed with --export/--skip and are
+considered all together.
+Example file:
+  {
+    'export': [ r"^trunk", r"^branches" ],
+    'skip': [ r"secret_branch" ]
+  }
 
 Editing commands specified via -e are only applied to REGULAR files. Directories or
 symlinks aren't editable. Edits should normally be stable. If the editing command
 exits with non-zero return value export is aborted.
-Example: { "foo": "sed -e 's/foo_string/bar_string/g' -i {0}" }
+Example file:
+  { "foo": "sed -e 's/foo_string/bar_string/g' -i {0}" }
 
 Resulting fast-export stream is sent to standard output.
 """
@@ -68,7 +84,9 @@ Resulting fast-export stream is sent to standard output.
 def main(argv):
     # parse command-line flags
     try:
-        opts, args = getopt.getopt(argv, 'fhdm:b:x:e:', ['help', 'export=', 'skip='])
+        opts, args = getopt.getopt(argv,
+            'fhdm:b:x:e:',
+            ['help', 'export=', 'skip=', 'branches='])
     except getopt.GetoptError as e:
         err(e)
 
@@ -98,9 +116,17 @@ def main(argv):
             f.close()
             cfg.edits = dict(x)
         elif o == '--export':
-            cfg.exportBranchRe = re.compile(v)
+            cfg.exportList.add(v)
         elif o == '--skip':
-            cfg.skipBranchRe = re.compile(v)
+            cfg.skipList.add(v)
+        elif o == '--branches':
+            f = open(v, 'r')
+            rules = dict(eval(f.read()))
+            f.close()
+            for re in rules.get('export', []):
+                cfg.exportList.add(re)
+            for re in rules.get('skip', []):
+                cfg.skipList.add(re)
         else:
             usage()
 
@@ -135,9 +161,8 @@ def startExport(path, cfg):
                 log("ERROR: skipping this branch")
                 continue
             prevRefs.add(ref)
-            if not cfg.exportBranchRe.search(name) or cfg.skipBranchRe.search(name):
-                continue
-            toExport.append((ref, b))
+            if cfg.exportList.m(name) and not cfg.skipList.m(name):
+                toExport.append((ref, b))
         log("Selected {0} brances for export (out of {1} in repo)", len(toExport), len(allBranches))
         exportBranches(toExport, repo, cfg)
     except berrors.BzrError as e:
@@ -600,9 +625,8 @@ class Config(object):
         self.refName = None
         self.stats = None
 
-        self.exportBranchRe = re.compile(r'.*')
-        # empty branch names don't make sence, so it's a safe default choice
-        self.skipBranchRe = re.compile(r'^$')
+        self.exportList = Matcher(True)
+        self.skipList = Matcher(False)
 
         self.nextMark = 1
         self.marks = dict()
@@ -647,6 +671,21 @@ class Config(object):
     def getMark(self, revid):
         """Get a mark corresponding to revid. Returns None if revision isn't marked"""
         return self.marks.get(revid, None)
+
+class Matcher(object):
+    # helper for managing include/exclude rules
+    def __init__(self, default):
+        self.patterns = []
+        self.default = default
+
+    def add(self, regexp):
+        self.patterns.append(re.compile(regexp))
+
+    def m(self, s):
+        if self.patterns:
+            return any((p.search(s) for p in self.patterns))
+        else:
+            return self.default
 
 class Stats(object):
     def __init__(self, prev = None):
