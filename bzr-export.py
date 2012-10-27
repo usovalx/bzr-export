@@ -74,7 +74,7 @@ Editing commands specified via -e are only applied to REGULAR files. Directories
 symlinks aren't editable. Edits should normally be stable. If the editing command
 exits with non-zero return value export is aborted.
 Example file:
-  { "foo": "sed -e 's/foo_string/bar_string/g' -i {0}" }
+  { "foo/bar": "sed -e 's/foo_string/bar_string/g' -i {0}" }
 
 Resulting fast-export stream is sent to standard output.
 """
