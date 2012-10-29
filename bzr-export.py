@@ -518,10 +518,7 @@ emailRe = re.compile(r'[<>@\n]')
 def formatName(name):
     if emailRe.search(name):
         name, mail = email.utils.parseaddr(name.encode('utf8'))
-        if name == '':
-            return '<%s>' % mail
-        else:
-            return '%s <%s>' % (name, mail)
+        return '%s <%s>' % (name, mail)
     else:
         return '%s <>' % name.encode('utf8')
 
