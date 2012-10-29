@@ -646,7 +646,7 @@ class Config(object):
                 maxMark = max(maxMark, int(s[0][1:]))
                 self.marks[s[1]] = s[0]
             f.close()
-            self.nextMark = maxMark
+            self.nextMark = maxMark + 1
             log("Marks loaded: {0} entries", len(self.marks))
         else:
             # try creating empty file, just to make sure we can write there
