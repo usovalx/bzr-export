@@ -425,8 +425,16 @@ def emitReset(buf, ref, mark):
         out(buf, 'reset {0}\n\n', ref)
 
 def emitCommitHeader(buf, ref, mark, revobj, parents):
-    headF = 'commit {0}\nmark {1}\ncommitter {2} {3}\n'
-    out(buf, headF, ref, mark, formatName(revobj.committer), formatTimestamp(revobj.timestamp, revobj.timezone))
+    committer = revobj.committer
+    authors = revobj.get_apparent_authors()
+    if len(authors) > 1:
+        log("WARN: commit {0} has {1} authors. Dropping all but first one", revobj.revision_id, len(authors))
+    assert(len(authors) > 0)
+    author = authors[0]
+    out(buf, 'commit {0}\nmark {1}\n', ref, mark)
+    if author != committer:
+        out(buf, 'author {0} {1}\n', formatName(author), formatTimestamp(revobj.timestamp, revobj.timezone))
+    out(buf, 'committer {0} {1}\n', formatName(committer), formatTimestamp(revobj.timestamp, revobj.timezone))
     msg = revobj.message.encode('utf8')
     msg += '\n\nBazaar: revid:%s' % revobj.revision_id
     out(buf, 'data {0}\n{1:s}\n', len(msg), msg)
