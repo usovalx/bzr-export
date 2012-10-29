@@ -657,7 +657,10 @@ class Config(object):
         if self.fname is None:
             return
         f = open(self.fname, "w")
-        for r, m in self.marks.iteritems():
+        # save them sorted
+        marks = list(self.marks.iteritems())
+        marks.sort(key=lambda m: int(m[1][1:]))
+        for r, m in marks:
             f.write('%s %s\n' % (m, r))
         f.close()
 
