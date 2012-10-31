@@ -150,7 +150,7 @@ def main(argv):
             cfg.load(v)
         elif o == '--skip':
             cfg.skipList.add(v)
-        if o == '--tags':
+        elif o == '--tags':
             ## FIXME
             pass
         elif o == '-x':
