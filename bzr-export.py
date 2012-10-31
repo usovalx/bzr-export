@@ -16,10 +16,28 @@ import time
 def usage():
     m = """Usage: bzr-export.py [flags] <path to repo or branch>
 
-   -h      Show this message.
+   --all-tags
+           Export tags from all Bzr branches. Creates annotated tags
+           with empty message. It will try to use the same tag name as in Bzr,
+           but may occasionally need to rewrite it to make it git-compatible.
+           If there are conflicting tags in different branches they won't be
+           exported.
 
-   -b      Branch name for git.
+   -b <name>
+           Branch name for git.
            Only used when exporting single branch, not a shared repo.
+
+   --branches=<file>
+           Include/exclude rules for branches are read from the file.
+           Only used when exporting whole repository.
+
+   -d      Debugging. Writes some debug info as comments in the resulting stream.
+
+   -e <file>
+           Read a list of editing commands. File is eval'd and should return python
+           dictionary. Keys of the dictionary are file names, and corresponding value
+           is command-line which would be run to edit the file. Command-line is
+           interpolated to replace {0} with the name of the file to edit.
 
    --export=<RE>
            Limit the branches in the repository which are going to be exported.
@@ -28,51 +46,51 @@ def usage():
            this option multiple times.
            Only used when exporting whole repository.
 
+   -f      Force export of all branches, even if they are cached in marks.
+
+   -h/--help
+           Show this message.
+
+   -m <file>
+           Load/save marks into this file.
+
    --skip=<RE>
            Don't export branches whose name matches given RE. Matching is done
            similarly to --only. You can specify this option multiple times.
            Only used when exporting whole repository.
 
-   --branches=<file>
-           Include/exclude rules for branches are read from the file.
-           Only used when exporting whole repository.
+   --tags=<file>
+           Read the list of tags to be exported from the given file. This method
+           allows to select/rename tags.
 
-   -f      Force export of all branches, even if they are cached in marks.
-
-   -d      Debugging. Writes some debug info as comments in the resulting stream.
-
-   -m      Load/save marks into this file.
-
-   -x      Read a list of excluded files/directories. File is eval'd and should
+   -x <file>
+           Read a list of excluded files/directories. File is eval'd and should
            return python array of file names.
-
-   -e      Read a list of editing commands. File is eval's and shoud return python
-           dictionary. Keys of the dictionary are file names, and corresponding value
-           is command-line which would be run to edit the file. Command-line is
-           interpolated to replace {0} with the name of the file to edit.
 
 
 Both branch and shared repo can be provided as a source. In case of shared repo,
-all branches in it will be exported. If you are doing initial export you really
-want to use -f, so that all branches are exported.
+all branches in it will be exported. By default only branches which contain new
+commits will be written into export stream. Specifying -f overrides this behaviour
+and exports all branches (up to --export/--skip/--branches filters).
 
-Excludes specified via -x are matched against both files and directories. Don't try
-to force matching against directories by appending '/' -- it won't match at all.
-Example file:
-  [ "foo", "bar/buz", ]
-
-A larger set of include/exclude rules for branches can be specified via --branches.
-These rules end up in the same pile as the one specifed with --export/--skip and are
-considered all together.
+Simple include/exclude patters for branches can be specifies directly on the command line
+using --export/--skip flag. A larger (or more permanent) set of include/exclude rules
+branches can be specified via --branches. Patterns read from the files and those specifies
+on the command line are considered all together.
 Example file:
   {
     'export': [ r"^trunk", r"^branches" ],
     'skip': [ r"secret_branch" ]
   }
 
+File excludes specified via -x are matched against both files and directories. Don't try
+to force matching against directories only by appending '/' -- it won't match at all.
+Example file:
+  [ "foo", "bar/buz", ]
+
 Editing commands specified via -e are only applied to REGULAR files. Directories or
-symlinks aren't editable. Edits should normally be stable. If the editing command
-exits with non-zero return value export is aborted.
+symlinks aren't editable. Edits should be stable. If the editing command exits with
+non-zero return value export is aborted.
 Example file:
   { "foo/bar": "sed -e 's/foo_string/bar_string/g' -i {0}" }
 
@@ -85,8 +103,15 @@ def main(argv):
     # parse command-line flags
     try:
         opts, args = getopt.getopt(argv,
-            'fhdm:b:x:e:',
-            ['help', 'export=', 'skip=', 'branches='])
+            'b:de:fhm:x:',
+            [
+                'all-tags',
+                'branches='
+                'export=',
+                'help',
+                'skip=',
+                'tags='
+            ])
     except getopt.GetoptError as e:
         err(e)
 
@@ -95,30 +120,11 @@ def main(argv):
 
     cfg = Config()
     for o, v in opts:
-        if o == '-h' or o == '--help':
-            usage()
-        elif o == '-m':
-            cfg.load(v)
-        elif o == '-d':
-            cfg.debug = True
-        elif o == '-f':
-            cfg.forceAll = True
+        if o == '--all-tags':
+            ## FIXME
+            pass
         elif o == '-b':
             cfg.refName = v
-        elif o == '-x':
-            f = open(v, 'r')
-            x = eval(f.read())
-            f.close()
-            cfg.excludedFiles = set(x)
-        elif o == '-e':
-            f = open(v, 'r')
-            x = eval(f.read())
-            f.close()
-            cfg.edits = dict(x)
-        elif o == '--export':
-            cfg.exportList.add(v)
-        elif o == '--skip':
-            cfg.skipList.add(v)
         elif o == '--branches':
             f = open(v, 'r')
             rules = dict(eval(f.read()))
@@ -127,6 +133,31 @@ def main(argv):
                 cfg.exportList.add(re)
             for re in rules.get('skip', []):
                 cfg.skipList.add(re)
+        elif o == '-d':
+            cfg.debug = True
+        elif o == '-e':
+            f = open(v, 'r')
+            x = eval(f.read())
+            f.close()
+            cfg.edits = dict(x)
+        elif o == '--export':
+            cfg.exportList.add(v)
+        elif o == '-f':
+            cfg.forceAll = True
+        elif o == '-h' or o == '--help':
+            usage()
+        elif o == '-m':
+            cfg.load(v)
+        elif o == '--skip':
+            cfg.skipList.add(v)
+        if o == '--tags':
+            ## FIXME
+            pass
+        elif o == '-x':
+            f = open(v, 'r')
+            x = eval(f.read())
+            f.close()
+            cfg.excludedFiles = set(x)
         else:
             usage()
 
@@ -286,7 +317,7 @@ def exportTreeChanges(buf, oldTree, newTree, cfg):
     # In general case exporting changes from bzr is highly nontrivial
     # bzr is tracking each file & directory by internal ids.
     # If you want to preserve history correctly you are forced to do some
-    # very messy voodo to correctly order and emit renames/deletes/modifications
+    # very messy voodoo to correctly order and emit renames/deletes/modifications
 
     # However I'm exporting stuff to git which is much simpler -- I can simply
     # delete all modified paths and export them afresh. This is a bit slower, but
