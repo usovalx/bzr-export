@@ -17,11 +17,10 @@ def usage():
     m = """Usage: bzr-export.py [flags] <path to repo or branch>
 
    --all-tags
-           Export tags from all Bzr branches. Creates annotated tags
-           with empty message. It will try to use the same tag name as in Bzr,
-           but may occasionally need to rewrite it to make it git-compatible.
-           If there are conflicting tags in different branches they won't be
-           exported.
+           Export tags from all Bzr branches. Creates annotated tags with empty message.
+           It will try to use the same tag name as in Bzr, but may occasionally need to
+           rewrite it to make it git-compatible. If there are conflicting tags in
+           different branches they won't be exported. Conflicts with --tags.
 
    -b <name>
            Branch name for git.
@@ -35,15 +34,14 @@ def usage():
 
    -e <file>
            Read a list of editing commands. File is eval'd and should return python
-           dictionary. Keys of the dictionary are file names, and corresponding value
-           is command-line which would be run to edit the file. Command-line is
-           interpolated to replace {0} with the name of the file to edit.
+           dictionary. Keys of the dictionary are file names, and corresponding value is
+           command-line which would be run to edit the file. Command-line is interpolated
+           to replace {0} with the name of the file to edit.
 
    --export=<RE>
-           Limit the branches in the repository which are going to be exported.
-           RE is a regular expression and it will be matched against full branch
-           name (e.g. branch path relative to the repo root). You can specify
-           this option multiple times.
+           Limit the branches in the repository which are going to be exported. RE is a
+           regular expression and it will be matched against full branch name (e.g. branch
+           path relative to the repo root). You can specify this option multiple times.
            Only used when exporting whole repository.
 
    -f      Force export of all branches, even if they are cached in marks.
@@ -55,23 +53,23 @@ def usage():
            Load/save marks into this file.
 
    --skip=<RE>
-           Don't export branches whose name matches given RE. Matching is done
-           similarly to --only. You can specify this option multiple times.
+           Don't export branches whose name matches given RE. Matching is done similarly
+           to --only. You can specify this option multiple times.
            Only used when exporting whole repository.
 
    --tags=<file>
-           Read the list of tags to be exported from the given file. This method
-           allows to select/rename tags.
+           Read the list of tags to be exported from the given file. This method allows to
+           select/rename tags. Conflicts with --all-tags.
 
    -x <file>
-           Read a list of excluded files/directories. File is eval'd and should
-           return python array of file names.
+           Read a list of excluded files/directories. File is eval'd and should return
+           python array of file names.
 
 
-Both branch and shared repo can be provided as a source. In case of shared repo,
-all branches in it will be exported. By default only branches which contain new
-commits will be written into export stream. Specifying -f overrides this behaviour
-and exports all branches (up to --export/--skip/--branches filters).
+Both branch and shared repo can be provided as a source. In case of shared repo, all
+branches in it will be exported. By default only branches which contain new commits will
+be written into export stream. Specifying -f overrides this behaviour and exports all
+branches (up to --export/--skip/--branches filters).
 
 Simple include/exclude patters for branches can be specifies directly on the command line
 using --export/--skip flag. A larger (or more permanent) set of include/exclude rules
@@ -94,6 +92,17 @@ non-zero return value export is aborted.
 Example file:
   { "foo/bar": "sed -e 's/foo_string/bar_string/g' -i {0}" }
 
+Tags aren't exported by default. With --all-tags it will try to export all tags from bzr.
+In bazaar tags are per branch, and may conflict between different branches. If such
+conflicts are found, corresponding tags won't be exported. If you want to export just some
+of the tags and/or rename them during the export use --tags. File is eval'd and should
+contain a dictionary of branchName -> list of tags. Every entry in the list of tags is
+either a tag name, or a tuple of old name + new name.
+Example file:
+{
+  'trunk': [ '1.2.0', ('1.3', 'release_1.3')],
+}
+
 Resulting fast-export stream is sent to standard output.
 """
     print(m)
@@ -106,7 +115,7 @@ def main(argv):
             'b:de:fhm:x:',
             [
                 'all-tags',
-                'branches='
+                'branches=',
                 'export=',
                 'help',
                 'skip=',
@@ -121,14 +130,11 @@ def main(argv):
     cfg = Config()
     for o, v in opts:
         if o == '--all-tags':
-            ## FIXME
-            pass
+            cfg.allTags = True
         elif o == '-b':
             cfg.refName = v
         elif o == '--branches':
-            f = open(v, 'r')
-            rules = dict(eval(f.read()))
-            f.close()
+            rules = dict(readCfg(v))
             for re in rules.get('export', []):
                 cfg.exportList.add(re)
             for re in rules.get('skip', []):
@@ -136,10 +142,7 @@ def main(argv):
         elif o == '-d':
             cfg.debug = True
         elif o == '-e':
-            f = open(v, 'r')
-            x = eval(f.read())
-            f.close()
-            cfg.edits = dict(x)
+            cfg.edits = dict(readCfg(v))
         elif o == '--export':
             cfg.exportList.add(v)
         elif o == '-f':
@@ -151,15 +154,20 @@ def main(argv):
         elif o == '--skip':
             cfg.skipList.add(v)
         elif o == '--tags':
-            ## FIXME
-            pass
+            cfg.tagMap = dict(readCfg(v))
+            # convert tag lists to map
+            for b, ts in cfg.tagMap.iteritems():
+                for i, tn in enumerate(ts):
+                    if not isinstance(tn, tuple):
+                        cfg.tagMap[b][i] = (tn, tn)
+                cfg.tagMap[b] = dict(ts)
         elif o == '-x':
-            f = open(v, 'r')
-            x = eval(f.read())
-            f.close()
-            cfg.excludedFiles = set(x)
+            cfg.excludedFiles = set(readCfg(v))
         else:
-            usage()
+            err('Unknown option: {0}')
+
+    if cfg.tagMap and cfg.allTags:
+        err("--all-tags and --tags don't go well together")
 
     # proceed to export
     startExport(args[0], cfg)
@@ -170,7 +178,7 @@ def startExport(path, cfg):
     try:
         b = branch.Branch.open(path)
         name = cfg.refName or b.user_url.rstrip('/').split('/')[-1]
-        exportBranches([(formatRefName(name), b)], b.repository, cfg)
+        exportBranches([(formatBranchName(name), b, name)], b.repository, cfg)
         return
     except berrors.NotBranchError:
         pass
@@ -185,7 +193,7 @@ def startExport(path, cfg):
         for b in allBranches:
             assert(b.user_url.startswith(repo.user_url))
             name = b.user_url[len(repo.user_url):].strip('/')
-            ref = formatRefName(name)
+            ref = formatBranchName(name)
             if ref in prevRefs:
                 log("ERROR: refname rewriting resulted in colliding refnames.")
                 log("ERROR: ref {0} for branch {1}", ref, b.user_url)
@@ -193,7 +201,7 @@ def startExport(path, cfg):
                 continue
             prevRefs.add(ref)
             if cfg.exportList.m(name) and not cfg.skipList.m(name):
-                toExport.append((ref, b))
+                toExport.append((ref, b, name))
         log("Selected {0} brances for export (out of {1} in repo)", len(toExport), len(allBranches))
         exportBranches(toExport, repo, cfg)
     except berrors.BzrError as e:
@@ -201,7 +209,7 @@ def startExport(path, cfg):
 
 def exportBranches(branches, repo, cfg):
     log("Collecting heads of all branches")
-    branches = [(b.last_revision(), ref, b) for ref, b in branches]
+    branches = [(b.last_revision(), ref, b, name) for ref, b, name in branches]
 
     branchesToExport = []
     commitsToExport = []
@@ -219,8 +227,8 @@ def exportBranches(branches, repo, cfg):
 
         # filter out branches with bad heads
         branches, badHeads = split(lambda b: b[0] in revisions, branches)
-        for head, ref, b in badHeads:
-            log("WARN: {0} -- invalid or empty head ({1})", ref, head)
+        for head, ref, b, name in badHeads:
+            log("WARN: {0} -- invalid or empty head ({1})", name, head)
 
     # now gather a list of revisions to export
     if branches:
@@ -252,11 +260,18 @@ def exportBranches(branches, repo, cfg):
 
     log("Writing {0} branch references", len(branchesToExport))
     buf = []
-    for head, ref, b in branchesToExport:
+    for head, ref, b, name in branchesToExport:
         #log("Exporting branch {0} as {1} ({2})", b.nick, ref, b.user_url)
         mark = cfg.getMark(head)
         assert(mark is not None) # it's good branches only
         emitReset(buf, ref, mark)
+
+    if cfg.allTags:
+        exportAllTags(buf, branchesToExport, repo, cfg)
+    elif cfg.tagMap:
+        exportSomeTags(buf, branchesToExport, repo, cfg)
+
+    # write out buffer with all stuff in it
     writeBuffer(buf)
 
 def collateNewHistory(branches, allRevs, repo, cfg):
@@ -289,12 +304,12 @@ def newRevs(revids, toExport, allRevs, repo, cfg):
         revids = [x for r in revs for x in r.parent_ids]
     return toExport
 
-def exportCommit(revid, ref, repository, cfg):
+def exportCommit(revid, ref, repo, cfg):
     # buffer up commit details, so that we can write out file blobs
     # before actual commit goes on the wire
     buf = []
 
-    rev = repository.get_revision(revid)
+    rev = repo.get_revision(revid)
     parents = rev.parent_ids
     if len(parents) == 0:
         parentRev = revision.NULL_REVISION
@@ -308,31 +323,31 @@ def exportCommit(revid, ref, repository, cfg):
     parentsMarks = map(cfg.getMark, parents)
     assert(all(parentsMarks)) # FIXME: check that all parents are present in marks
     emitCommitHeader(buf, ref, thisMark, rev, parentsMarks)
-    oldTree, newTree = map(repository.revision_tree, [parentRev, revid])
+    oldTree, newTree = map(repo.revision_tree, [parentRev, revid])
     exportTreeChanges(buf, oldTree, newTree, cfg)
     out(buf, '\n')
     writeBuffer(buf)
 
 def exportTreeChanges(buf, oldTree, newTree, cfg):
-    # In general case exporting changes from bzr is highly nontrivial
-    # bzr is tracking each file & directory by internal ids.
-    # If you want to preserve history correctly you are forced to do some
-    # very messy voodoo to correctly order and emit renames/deletes/modifications
+    # In general case exporting changes from bzr is highly nontrivial bzr is tracking each
+    # file & directory by internal ids. If you want to preserve history correctly you are
+    # forced to do some very messy voodoo to correctly order and emit
+    # renames/deletes/modifications
 
-    # However I'm exporting stuff to git which is much simpler -- I can simply
-    # delete all modified paths and export them afresh. This is a bit slower, but
-    # much easier to implement correctly. There is one complication though -- my
-    # bzr repo has empty dirs in the history, and I want to preserve them in the
-    # export by emitting .keepme files where appropriate. To correctly track them
-    # during deletes/renames I need to make sure I correctly issue whole-dir commands.
+    # However I'm exporting stuff to git which is much simpler -- I can simply delete all
+    # modified paths and export them afresh. This is a bit slower, but much easier to
+    # implement correctly. There is one complication though -- my bzr repo has empty dirs
+    # in the history, and I want to preserve them in the export by emitting .keepme files
+    # where appropriate. To correctly track them during deletes/renames I need to make
+    # sure I correctly issue whole-dir commands.
 
     # The resulting algorithm is following:
     # * rewrite the list of changes between two trees in terms of simple delete/create
     # commands and split them into 4 groups:
     #    delete/create directories & delete/create(modify) files
     # * simplify the resulting list of operations by taking into account subdirectory
-    # operations. E.g. we don't need to separately delete nested files/subdirs if
-    # parent directory is to be deleted. Same with creation.
+    # operations. E.g. we don't need to separately delete nested files/subdirs if parent
+    # directory is to be deleted. Same with creation.
     # * Finally issue resulting list of deletes & then creations.
 
     delDirs, newDirs, delFiles, newFiles = [], [], [], []
@@ -360,8 +375,8 @@ def exportTreeChanges(buf, oldTree, newTree, cfg):
             assert(c[1][0] is not None and c[6][0] is not None)
             addDel(c)
         else: # changed or moved
-            # files changed in-place don't have to be deleted, everything else
-            # becomes delete + new item
+            # files changed in-place don't have to be deleted, everything else becomes
+            # delete + new item
             if c[1][0] == c[1][1] and c[6][0] != 'directory' and c[6][1] != 'directory':
                 addNew(c)
             else:
@@ -449,11 +464,68 @@ def exportSubTree(buf, path, tree, cfg):
                 else:
                     emitFile(buf, obj[0], obj[2], obj[4], tree, cfg)
 
+def exportAllTags(buf, branches, repo, cfg):
+    branches = filter(lambda b: b[2].supports_tags(), branches)
+    tagList = [(sanitizeRefName(tagName.encode('utf8')), revid, tagName, branchName)
+                 for _, _, b, branchName in branches for tagName, revid in b.tags.get_tag_dict().iteritems()]
+    exportTags(buf, tagList, repo, cfg)
+
+def exportSomeTags(buf, branches, repo, cfg):
+    branches = filter(lambda b: b[2].supports_tags(), branches)
+    tagList = []
+    for _, _, b, branchName in branches:
+        if branchName in cfg.tagMap:
+            nameMap = cfg.tagMap[branchName]
+            for tagName, revid in b.tags.get_tag_dict().iteritems():
+                if tagName in nameMap:
+                    tagList.append((sanitizeRefName(nameMap[tagName.encode('utf8')]), revid, tagName, branchName))
+    exportTags(buf, tagList, repo, cfg)
+
+def exportTags(buf, tagList, repo, cfg):
+    """taglist - list of (tagRefName, revId, tagBzrName, branchRef)"""
+    # drop tags pointing to non-exported revisions
+    tagList, skips = split(lambda t: cfg.getMark(t[1]), tagList)
+    for _, revId, tagName, branchName in skips:
+        log('WARN: skipping tag {0} from {1}: unknown revision {2}', tagName, branchName, revId)
+
+    # generate mark ids for tags
+    tagList = map(lambda t: list(t) + ['TAG-{0}-{1}'.format(t[0], t[1])], tagList)
+
+    # drop tags which we have exported before
+    tagList = filter(lambda t: cfg.getMark(t[4]) is None, tagList)
+
+    # now tricky part -- in bzr tags are per-branch
+    # we need to filter out tags which are different between branches
+    tags = dict()
+    bads = set()
+    for t in tagList:
+        tagRef, revId, tagName, branchName, tagId = t
+        if tagRef in bads:
+            # we already know its bad
+            continue
+        if tagRef not in tags:
+            tags[tagRef] = t
+        elif tags[tagRef][1] != revId:
+            log('WARN: skipping tag {0}: not consistent between {1} and {2}', tagRef, branchName, tags[tagRef][3])
+            del tags[tagRef]
+            bads.add(tagRef)
+
+    # and finally export them
+    log("Exporting {0} tags", len(tags))
+    for tagRef, revId, tagName, branchRef, tagId in tags.itervalues():
+        m = cfg.getMark(revId)
+        cfg.newMark(tagId) # to prevent it being re-exported on the next run
+        emitTag(buf, tagRef, m, repo.get_revision(revId))
+
 def emitReset(buf, ref, mark):
     if mark is not None:
         out(buf, 'reset {0}\nfrom {1}\n\n', ref, mark)
     else:
         out(buf, 'reset {0}\n\n', ref)
+
+def emitTag(buf, ref, mark, revobj):
+    out(buf, 'tag {0}\nfrom {1}\n', ref, mark)
+    out(buf, 'tagger bzr-export <> {0}\ndata 0\n\n', formatTimestamp(revobj.timestamp, revobj.timezone))
 
 def emitCommitHeader(buf, ref, mark, revobj, parents):
     committer = revobj.committer
@@ -481,13 +553,11 @@ def emitFile(buf, path, kind, fileId, tree, cfg):
             mode = '755'
         sha = tree.get_file_sha1(fileId)
         assert(sha is not None and sha != '')
-        # Caching files in presence of editing is a bit tricky.
-        # We need to make sure that we don't use edited content where
-        # original file should go nor mix up edited content from
-        # different edit commands.
-        # What we do -- to cached edited file we store it under a key
-        # which includes both the hash of the original file and the
-        # hash of the editing command we use.
+        # Caching files in presence of editing is a bit tricky. We need to make sure that
+        # we don't use edited content where original file should go nor mix up edited
+        # content from different edit commands.
+        # What we do -- to cached edited file we store it under a key which includes both
+        # the hash of the original file and the hash of the editing command we use.
         # This relies on editing being stable.
         editCmd = cfg.edits.get(path, None)
         if editCmd:
@@ -571,17 +641,16 @@ def formatPath(path):
     return path.encode('utf8')
 
 # stolen from bzr fast-export
-def formatRefName(branchName):
-    """Rewrite branchName so that it will be accepted by git-fast-import.
-    For the detailed rules see check_ref_format.
+def sanitizeRefName(refName):
+    """Rewrite branchName so that it will be accepted by git-fast-import. For the detailed
+    rules see check_ref_format.
 
-    By rewriting the refname we are breaking uniqueness guarantees provided by bzr
-    so we have to manually verify that resulting ref names are unique.
+    By rewriting the refname we are breaking uniqueness guarantees provided by bzr so we
+    have to manually verify that resulting ref names are unique.
 
     http://www.kernel.org/pub/software/scm/git/docs/git-check-ref-format.html
     """
-    refname = "refs/heads/%s" % branchName.encode('utf8')
-    refname = re.sub(
+    refName = re.sub(
         # '/.' in refname or startswith '.'
         r"/\.|^\."
         # '..' in refname
@@ -598,8 +667,11 @@ def formatRefName(branchName):
         r"|@{"
         # "\\" in refname
         r"|\\",
-        "_", refname)
-    return refname
+        "_", refName)
+    return refName
+
+def formatBranchName(name):
+    return 'refs/heads/' + sanitizeRefName(name.encode('utf8'))
 
 def writeBuffer(buf):
     writeOut(''.join(buf))
@@ -639,6 +711,13 @@ def split(fcn, l):
             b.append(x)
     return a, b
 
+def readCfg(fname):
+    f = open(fname, 'r')
+    try:
+        return eval(f.read())
+    finally:
+        f.close()
+
 def prof():
     import cProfile
     out = open("/dev/null", "w")
@@ -653,13 +732,15 @@ class Config(object):
     """Misc stuff here -- various config flags & marks management"""
 
     def __init__(self):
+        self.allTags = False
         self.debug = False
-        self.excludedFiles = set()
         self.edits = dict()
+        self.excludedFiles = set()
         self.forceAll = False
         self.fname = None
         self.refName = None
         self.stats = None
+        self.tagMap = None
 
         self.exportList = Matcher(True)
         self.skipList = Matcher(False)
