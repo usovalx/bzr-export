@@ -103,6 +103,11 @@ Example file:
   'trunk': [ '1.2.0', ('1.3', 'release_1.3')],
 }
 
+If you have more algorithmic way of dealing with tags, you can provide lambda expression
+which should return either None or new tag name given bzr branch & tag names.
+Example file:
+lambda branch, tag: 'tag_' + tag if branch == 'trunk' and re.search('^[0-9]', tag) else None
+
 Resulting fast-export stream is sent to standard output.
 """
     print(m)
@@ -130,7 +135,9 @@ def main(argv):
     cfg = Config()
     for o, v in opts:
         if o == '--all-tags':
-            cfg.allTags = True
+            if cfg.tagFilter is not None:
+                err("--all-tags and --tags don't go well together")
+            cfg.tagFilter = lambda branch, tag: tag
         elif o == '-b':
             cfg.refName = v
         elif o == '--branches':
@@ -154,20 +161,25 @@ def main(argv):
         elif o == '--skip':
             cfg.skipList.add(v)
         elif o == '--tags':
-            cfg.tagMap = dict(readCfg(v))
-            # convert tag lists to map
-            for b, ts in cfg.tagMap.iteritems():
-                for i, tn in enumerate(ts):
-                    if not isinstance(tn, tuple):
-                        cfg.tagMap[b][i] = (tn, tn)
-                cfg.tagMap[b] = dict(ts)
+            if cfg.tagFilter is not None:
+                err("--all-tags and --tags don't go well together")
+            x = readCfg(v)
+            if callable(x):
+                cfg.tagFilter = x
+                cfg.tagFilter('foo', 'bar') # quick and dirty check that it accepts correct arguments
+            else:
+                x = dict(x)
+                # convert list of tag names/mappings to map
+                for b, ts in x.iteritems():
+                    for i, tn in enumerate(ts):
+                        if not isinstance(tn, tuple):
+                            x[b][i] = (tn, tn)
+                    x[b] = dict(ts)
+                cfg.tagFilter = lambda branch, tag: x[branch].get(tag, None) if branch in x else None
         elif o == '-x':
             cfg.excludedFiles = set(readCfg(v))
         else:
             err('Unknown option: {0}')
-
-    if cfg.tagMap and cfg.allTags:
-        err("--all-tags and --tags don't go well together")
 
     # proceed to export
     startExport(args[0], cfg)
@@ -266,10 +278,8 @@ def exportBranches(branches, repo, cfg):
         assert(mark is not None) # it's good branches only
         emitReset(buf, ref, mark)
 
-    if cfg.allTags:
-        exportAllTags(buf, branchesToExport, repo, cfg)
-    elif cfg.tagMap:
-        exportSomeTags(buf, branchesToExport, repo, cfg)
+    if cfg.tagFilter:
+        exportTags(buf, branchesToExport, repo, cfg)
 
     # write out buffer with all stuff in it
     writeBuffer(buf)
@@ -464,25 +474,17 @@ def exportSubTree(buf, path, tree, cfg):
                 else:
                     emitFile(buf, obj[0], obj[2], obj[4], tree, cfg)
 
-def exportAllTags(buf, branches, repo, cfg):
+def exportTags(buf, branches, repo, cfg):
     branches = filter(lambda b: b[2].supports_tags(), branches)
-    tagList = [(sanitizeRefName(tagName.encode('utf8')), revid, tagName, branchName)
-                 for _, _, b, branchName in branches for tagName, revid in b.tags.get_tag_dict().iteritems()]
-    exportTags(buf, tagList, repo, cfg)
 
-def exportSomeTags(buf, branches, repo, cfg):
-    branches = filter(lambda b: b[2].supports_tags(), branches)
+    # build a list of tags we want to export
     tagList = []
     for _, _, b, branchName in branches:
-        if branchName in cfg.tagMap:
-            nameMap = cfg.tagMap[branchName]
-            for tagName, revid in b.tags.get_tag_dict().iteritems():
-                if tagName in nameMap:
-                    tagList.append((sanitizeRefName(nameMap[tagName.encode('utf8')]), revid, tagName, branchName))
-    exportTags(buf, tagList, repo, cfg)
+        for tagName, revid in b.tags.get_tag_dict().iteritems():
+            newName = cfg.tagFilter(branchName, tagName)
+            if newName:
+                tagList.append((sanitizeRefName(newName.encode('utf8')), revid, tagName, branchName))
 
-def exportTags(buf, tagList, repo, cfg):
-    """taglist - list of (tagRefName, revId, tagBzrName, branchRef)"""
     # drop tags pointing to non-exported revisions
     tagList, skips = split(lambda t: cfg.getMark(t[1]), tagList)
     for _, revId, tagName, branchName in skips:
@@ -732,7 +734,6 @@ class Config(object):
     """Misc stuff here -- various config flags & marks management"""
 
     def __init__(self):
-        self.allTags = False
         self.debug = False
         self.edits = dict()
         self.excludedFiles = set()
@@ -740,7 +741,7 @@ class Config(object):
         self.fname = None
         self.refName = None
         self.stats = None
-        self.tagMap = None
+        self.tagFilter = None
 
         self.exportList = Matcher(True)
         self.skipList = Matcher(False)
