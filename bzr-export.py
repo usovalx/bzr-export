@@ -49,6 +49,10 @@ def usage():
    -h/--help
            Show this message.
 
+   -i <file>
+           List of files to inject into the repository during import. File is eval'd and
+           should return python dictionary of injected path -> source file name.
+
    -m <file>
            Load/save marks into this file.
 
@@ -86,6 +90,13 @@ to force matching against directories only by appending '/' -- it won't match at
 Example file:
   [ "foo", "bar/buz", ]
 
+Current implementation of file injection is quite simplistic and would only reliably work
+if you are injecting files into the root of the tree. Other cases may work, but aren't
+explicitly supported. In particular it won't check whether target directory exists and
+won't do any smart handling if it is renamed or moved.
+Example file:
+  { ".gitignore": "source_file" }
+
 Editing commands specified via -e are only applied to REGULAR files. Directories or
 symlinks aren't editable. Edits should be stable. If the editing command exits with
 non-zero return value export is aborted.
@@ -117,7 +128,7 @@ def main(argv):
     # parse command-line flags
     try:
         opts, args = getopt.getopt(argv,
-            'b:de:fhm:x:',
+            'b:de:fhi:m:x:',
             [
                 'all-tags',
                 'branches=',
@@ -156,6 +167,15 @@ def main(argv):
             cfg.forceAll = True
         elif o == '-h' or o == '--help':
             usage()
+        elif o == '-i':
+            files = dict(readCfg(v))
+            for k, v in files.iteritems():
+                data = readFile(v)
+                hasher = hashlib.sha1()
+                hasher.update(data)
+                id = 'INJECT-' + hasher.hexdigest()
+                files[k] = (id, data)
+            cfg.injects = files
         elif o == '-m':
             cfg.load(v)
         elif o == '--skip':
@@ -335,6 +355,8 @@ def exportCommit(revid, ref, repo, cfg):
     emitCommitHeader(buf, ref, thisMark, rev, parentsMarks)
     oldTree, newTree = map(repo.revision_tree, [parentRev, revid])
     exportTreeChanges(buf, oldTree, newTree, cfg)
+    for path, data in cfg.injects.iteritems():
+        emitInjectedFile(buf, path, data, cfg)
     out(buf, '\n')
     writeBuffer(buf)
 
@@ -585,6 +607,13 @@ def emitFile(buf, path, kind, fileId, tree, cfg):
         log("WARN: unsupported file kind '{0}' in {1} path {2}", kind, tree.get_revision_id(), formatPath(path))
         return
 
+def emitInjectedFile(buf, path, data, cfg):
+    mark = cfg.getMark(data[0])
+    if mark is None:
+        mark = cfg.newMark(data[0])
+        writeOut('blob\nmark {0}\ndata {1}\n{2}\n'.format(mark, len(data[1]), data[1]))
+    out(buf, 'M {0} {1} {2}\n', '644', mark, formatPath(path))
+
 def emitPlaceholder(buf, path):
     out(buf, 'M 644 inline {0}\ndata 0\n', formatPath(path + '/.keepme'))
 
@@ -713,12 +742,12 @@ def split(fcn, l):
             b.append(x)
     return a, b
 
+def readFile(fname):
+    with open(fname) as f:
+        return f.read()
+
 def readCfg(fname):
-    f = open(fname, 'r')
-    try:
-        return eval(f.read())
-    finally:
-        f.close()
+    return eval(readFile(fname))
 
 def prof():
     import cProfile
@@ -739,6 +768,7 @@ class Config(object):
         self.excludedFiles = set()
         self.forceAll = False
         self.fname = None
+        self.injects = dict()
         self.refName = None
         self.stats = None
         self.tagFilter = None
