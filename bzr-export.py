@@ -1,6 +1,6 @@
 #!/usr/bin/env python2
 
-from bzrlib import branch, bzrdir, revision, repository, tsort
+from bzrlib import branch, revision, repository, tsort
 from bzrlib import errors as berrors
 import datetime
 import email.utils
@@ -142,10 +142,10 @@ def main(argv):
             cfg.refName = v
         elif o == '--branches':
             rules = dict(readCfg(v))
-            for re in rules.get('export', []):
-                cfg.exportList.add(re)
-            for re in rules.get('skip', []):
-                cfg.skipList.add(re)
+            for rule in rules.get('export', []):
+                cfg.exportList.add(rule)
+            for rule in rules.get('skip', []):
+                cfg.skipList.add(rule)
         elif o == '-d':
             cfg.debug = True
         elif o == '-e':
@@ -166,7 +166,8 @@ def main(argv):
             x = readCfg(v)
             if callable(x):
                 cfg.tagFilter = x
-                cfg.tagFilter('foo', 'bar') # quick and dirty check that it accepts correct arguments
+                # quick and dirty check that it accepts correct arguments
+                cfg.tagFilter('foo', 'bar')
             else:
                 x = dict(x)
                 # convert list of tag names/mappings to map
@@ -268,7 +269,6 @@ def exportBranches(branches, repo, cfg):
             log("Finished: {0}", cfg.stats)
         finally:
             lock.unlock()
-            pass
 
     log("Writing {0} branch references", len(branchesToExport))
     buf = []
@@ -571,7 +571,7 @@ def emitFile(buf, path, kind, fileId, tree, cfg):
             mark = cfg.newMark(sha)
             data = tree.get_file_text(fileId)
             if editCmd:
-                data = editFile(path, editCmd, data)
+                data = editFile(editCmd, data)
             writeOut('blob\nmark {0}\ndata {1}\n{2}\n'.format(mark, len(data), data))
             cfg.stats.exportFile(len(data))
         else:
@@ -600,7 +600,7 @@ def emptyDir(path, cfg, tree):
         r = filter(lambda t: t[0] not in cfg.excludedFiles, x[1])
         return len(r) == 0
 
-def editFile(path, command, data):
+def editFile(command, data):
     t = tempfile.NamedTemporaryFile(mode='wb', delete=False)
     t.file.write(data)
     t.close()
@@ -722,10 +722,10 @@ def readCfg(fname):
 
 def prof():
     import cProfile
-    out = open("/dev/null", "w")
+    f = open("/dev/null", "w")
     save = sys.stdout
     try:
-        sys.stdout = out
+        sys.stdout = f
         cProfile.run('main(["/home/usov/build/testrepo/docky/trunk"])', "prof")
     finally:
         sys.stdout = save
@@ -809,7 +809,7 @@ class Matcher(object):
             return self.default
 
 class Stats(object):
-    def __init__(self, prev = None):
+    def __init__(self):
         # stats for this export
         self._skippedRevs = 0
         self._exportedRevs = 0
