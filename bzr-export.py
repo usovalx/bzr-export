@@ -207,16 +207,7 @@ def main(argv):
     cfg.save()
 
 def startExport(path, cfg):
-    # try opening it as branch
-    try:
-        b = branch.Branch.open(path)
-        name = cfg.refName or b.user_url.rstrip('/').split('/')[-1]
-        exportBranches([(formatBranchName(name), b, name)], b.repository, cfg)
-        return
-    except berrors.NotBranchError:
-        pass
-
-    # or as shared repo
+    # try opening 'path' as shared repo
     try:
         repo = repository.Repository.open(path)
         log("Gathering list of branches in repo")
@@ -237,7 +228,17 @@ def startExport(path, cfg):
                 toExport.append((ref, b, name))
         log("Selected {0} brances for export (out of {1} in repo)", len(toExport), len(allBranches))
         exportBranches(toExport, repo, cfg)
+        return
     except berrors.BzrError as e:
+        pass
+
+    # or as a branch
+    try:
+        b = branch.Branch.open(path)
+        name = cfg.refName or b.user_url.rstrip('/').split('/')[-1]
+        exportBranches([(formatBranchName(name), b, name)], b.repository, cfg)
+        return
+    except berrors.NotBranchError:
         err(e)
 
 def exportBranches(branches, repo, cfg):
