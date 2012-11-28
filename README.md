@@ -7,7 +7,7 @@ Q&A
 ---
 * Why not use bzr-fastimport?  
   It's buggy. Try exporting [this repo](https://code.launchpad.net/~a-s-usov/+junk/badCommit1) or
-  [this one](https://code.launchpad.net/~a-s-usov/+junk/badCommit2) with bzr-fastexport and see for yourself.
+  [this one](https://code.launchpad.net/~a-s-usov/+junk/badCommit2) with it and see for yourself.
 
 * Why write a new tool instead of fixing bzr-fastimport?  
   First bzr-fastimport isn't actively maintained anymore. Some of my patches have been stuck 
