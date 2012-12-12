@@ -703,7 +703,12 @@ def sanitizeRefName(refName):
     return refName
 
 def formatBranchName(name):
-    return 'refs/heads/' + sanitizeRefName(name.encode('utf8'))
+    if len(name) > 0:
+        return 'refs/heads/' + sanitizeRefName(name.encode('utf8'))
+    else:
+        # bzr shared repos are pretty stupid in this respect
+        # you CAN create a branch (especially if it's bare) at the root of the shared repo
+        return 'refs/heads/__repo_root'
 
 def writeBuffer(buf):
     writeOut(''.join(buf))
