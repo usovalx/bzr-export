@@ -341,7 +341,7 @@ def exportCommit(revid, ref, repo, cfg):
     buf = []
 
     rev = repo.get_revision(revid)
-    parents = rev.parent_ids
+    parents = remove_duplicates(rev.parent_ids)
     if len(parents) == 0:
         parentRev = revision.NULL_REVISION
         emitReset(buf, ref, None)
@@ -560,7 +560,7 @@ def emitCommitHeader(buf, ref, mark, revobj, parents):
     assert(len(authors) > 0)
     author = authors[0]
     out(buf, 'commit {0}\nmark {1}\n', ref, mark)
-    if author != committer:
+    if author != committer and len(author) != 0:
         out(buf, 'author {0} {1}\n', formatName(author), formatTimestamp(revobj.timestamp, revobj.timezone))
     out(buf, 'committer {0} {1}\n', formatName(committer), formatTimestamp(revobj.timestamp, revobj.timezone))
     msg = revobj.message.encode('utf8')
@@ -747,6 +747,13 @@ def split(fcn, l):
         else:
             b.append(x)
     return a, b
+
+def remove_duplicates(l):
+    res = l[:1]
+    for x in l[1:]:
+        if x != res[-1]:
+            res.append(x)
+    return res
 
 def readFile(fname):
     with open(fname) as f:
