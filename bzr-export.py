@@ -217,6 +217,10 @@ def startExport(path, cfg):
         for b in allBranches:
             assert(b.user_url.startswith(repo.user_url))
             name = b.user_url[len(repo.user_url):].strip('/')
+            # if there is just 1 branch located at the very root of the repo,
+            # handle its name as if it was branch checkout and not a shared repo
+            if len(allBranches) == 1 and name == '':
+                name = cfg.refName or b.user_url.rstrip('/').split('/')[-1]
             ref = formatBranchName(name)
             if ref in prevRefs:
                 log("ERROR: refname rewriting resulted in colliding refnames.")
@@ -229,7 +233,7 @@ def startExport(path, cfg):
         log("Selected {0} brances for export (out of {1} in repo)", len(toExport), len(allBranches))
         exportBranches(toExport, repo, cfg)
         return
-    except berrors.BzrError as e:
+    except berrors.NoRepositoryPresent:
         pass
 
     # or as a branch
@@ -238,7 +242,7 @@ def startExport(path, cfg):
         name = cfg.refName or b.user_url.rstrip('/').split('/')[-1]
         exportBranches([(formatBranchName(name), b, name)], b.repository, cfg)
         return
-    except berrors.NotBranchError:
+    except berrors.NotBranchError as e:
         err(e)
 
 def exportBranches(branches, repo, cfg):
