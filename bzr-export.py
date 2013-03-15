@@ -659,7 +659,7 @@ def formatTimestamp(timestamp, offset):
     minutes = offset/60
     return '%d %s%02d%02d' % (timestamp, sign, hours, minutes)
 
-emailRe = re.compile(r'[<>@\n]')
+emailRe = re.compile(r'[<>@]')
 def formatName(name):
     if emailRe.search(name):
         name, mail = email.utils.parseaddr(name.encode('utf8'))
