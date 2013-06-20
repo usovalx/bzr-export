@@ -650,14 +650,7 @@ def editFile(command, data):
         return data
 
 def formatTimestamp(timestamp, offset):
-    if offset < 0:
-        sign = '-'
-        offset = -offset
-    else:
-        sign = '+'
-    hours, offset = offset/3600, offset % 3600
-    minutes = offset/60
-    return '%d %s%02d%02d' % (timestamp, sign, hours, minutes)
+    return '%d %+03d%02d' % (timestamp, offset/3600, offset%3600 / 60)
 
 emailRe = re.compile(r'[<>@]')
 def formatName(name):
